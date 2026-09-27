@@ -3,7 +3,7 @@
  * OphirPay webhook signature verification — reference implementation (Go).
  *
  * Signed material (must match `buildSignedPayload` in
- * `src/lib/webhooks/signing.ts`):
+ * `src/lib/webhook-deliver.ts`):
  *
  *   <timestamp>.<canonicalBody>
  *

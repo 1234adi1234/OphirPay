@@ -226,56 +226,6 @@ The `Dockerfile` uses a 3-stage build:
 - Standalone output is used (configured in `next.config.ts`)
 - The runner stage declares a `HEALTHCHECK` (issue #738) — see below
 
-### Published release images & verification (issues #749, #750)
-
-Prebuilt multi-arch images (`linux/amd64`, `linux/arm64`) are published to GHCR
-by [`.github/workflows/release.yml`](../.github/workflows/release.yml) whenever a
-`v*.*.*` tag is pushed:
-
-```text
-ghcr.io/ophirpay/ophirpay:v0.X.0     # immutable semantic version (pin this)
-ghcr.io/ophirpay/ophirpay:sha-<sha>  # specific commit build
-ghcr.io/ophirpay/ophirpay:latest     # moving tag — convenience only
-```
-
-The k8s manifest and the Helm chart pin `v0.1.0` with
-`imagePullPolicy: IfNotPresent`, so a pod restart always resolves to the same
-digest. Prefer the digest form in production:
-
-```bash
-# Deploy a specific, verified digest
-helm upgrade ophirpay helm/ophirpay \
-  --set image.repository=ghcr.io/ophirpay/ophirpay \
-  --set image.tag=sha256:<digest> --set image.pullPolicy=IfNotPresent
-```
-
-**What ships, and from which commit.** Each release image carries an SBOM and a
-build provenance attestation, and is keyless-signed with cosign. To verify a
-digest before deploying it:
-
-```bash
-# 1. Resolve the tag -> digest
-docker buildx imagetools inspect ghcr.io/ophirpay/ophirpay:v0.X.0
-
-# 2. Verify provenance: was this digest built by the release workflow from
-#    this repository? (GitHub CLI >= 2.49)
-gh attestation verify \
-  oci://ghcr.io/ophirpay/ophirpay@sha256:<digest> --repo OphirPay/OphirPay
-
-# 3. Read the SBOM BuildKit attached to the image
-docker buildx imagetools inspect \
-  ghcr.io/ophirpay/ophirpay:v0.X.0 --format '{{ json .SBOM }}'
-
-# 4. Or verify the keyless cosign signature
-cosign verify \
-  --certificate-identity-regexp '^https://github.com/OphirPay/OphirPay/' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/ophirpay/ophirpay:v0.X.0
-```
-
-The same procedure is documented from the maintainer's point of view in
-[RELEASE.md](../RELEASE.md) → "Verifying a release artifact".
-
 ### Liveness vs readiness
 
 OphirPay exposes two probes with deliberately different meanings. They are
@@ -486,53 +436,6 @@ curl https://ophirpay.com/api/health
 
 ---
 
-## Database backups & the restore drill
-
-Nightly PostgreSQL backups are produced by
-[`.github/workflows/db-backup.yml`](../.github/workflows/db-backup.yml) and
-stored in the `ophirpay-backups` S3 bucket. A backup is only trusted when it has
-been restored at least once, so the same backup is verified automatically.
-
-### Run the restore drill
-
-[`.github/workflows/db-restore-drill.yml`](../.github/workflows/db-restore-drill.yml)
-runs **weekly** (Mondays 05:00 UTC) and **on demand**. It provisions a
-disposable Postgres, restores the newest backup through
-[`scripts/restore-drill.sh`](../scripts/restore-drill.sh), then verifies:
-
-- core-table row counts (`Payment`, `Batch`, `Recurrence`, `ScheduledPayment`,
-  `PaymentRequest`, `Webhook`, `WebhookDelivery`, `Refund`, `User`) — a missing
-  or unqueryable table fails the drill;
-- `prisma migrate status` against the restored database (a missing migrations
-  table or a failed migration fails the drill).
-
-Run it manually, or prove that a bad backup fails the drill:
-
-```bash
-# Restore the newest backup
-gh workflow run db-restore-drill.yml --repo OphirPay/OphirPay
-
-# Deliberately point it at a corrupt/missing object — the run MUST fail
-gh workflow run db-restore-drill.yml --repo OphirPay/OphirPay \
-  -f backup_key=does-not-exist.sql.gz
-```
-
-Run the same drill locally with AWS credentials and `Docker` available:
-
-```bash
-AWS_REGION=... ./scripts/restore-drill.sh
-```
-
-### Freshness & retention
-
-The `db-backup.yml` workflow additionally asserts **freshness** (the newest
-backup must be younger than 26 h) on an independent schedule and opens a
-tracking issue when a backup fails. The retention policy (daily copies kept 30
-days, Sunday copies 90 days) is documented in
-[`docs/DISASTER_RECOVERY.md`](DISASTER_RECOVERY.md#11-backup-monitoring--retention).
-
----
-
 ## Cache Headers for Static Assets and APIs
 
 `next.config.ts` is the **single source of truth** for the static headers the
@@ -681,21 +584,36 @@ DATABASE_PROVIDER=sqlite npx prisma db push
 
 ## Post-Deployment Verification
 
+### Stellar wallet discovery (SEP-1)
+
+The application serves a SEP-1 discovery document at
+`https://<your-domain>/.well-known/stellar.toml`. It is generated at request
+time from the deployment's Stellar network, network passphrase, RPC/Horizon
+URLs, and configured OphirPay/emitter contract IDs, so each environment reports
+its own deployment metadata. The document also publishes the network-specific
+USDC issuer and links to the deployment and security documentation. Verify the
+endpoint after deployment and confirm its `NETWORK_PASSPHRASE`,
+`OPHIRPAY_CONTRACT_ID`, and `EMITTER_CONTRACT_ID` values match the variables
+configured for that deployment.
+
 Run these checks after deploying:
 
 ```bash
-# 1. Health check
+# 1. SEP-1 discovery document
+curl -fsS https://your-domain.com/.well-known/stellar.toml
+
+# 2. Health check
 curl -s https://your-domain.com/api/health | jq .
 
-# 2. Check the dashboard loads
+# 3. Check the dashboard loads
 curl -s -o /dev/null -w "%{http_code}" https://your-domain.com/
 # Expected: 200
 
-# 3. Check API routes
+# 4. Check API routes
 curl -s -o /dev/null -w "%{http_code}" https://your-domain.com/api/health
 # Expected: 200
 
-# 4. Verify database connectivity
+# 5. Verify database connectivity
 curl -s https://your-domain.com/api/health | jq .database
 # Expected: "connected"
 ```

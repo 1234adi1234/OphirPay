@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 const SECRET = "test-secret-0123456789";
 const OUT_DIR = join(fileURLToPath(new URL(".", import.meta.url)), "..", "examples", "automation-payloads");
 
-/** Sign exactly like `buildSignedPayload` (src/lib/webhooks/signing.ts). */
+/** Sign exactly like `buildSignedPayload` (src/lib/webhook-deliver.ts). */
 function signedEnvelope(event, timestamp, data) {
   const canonical = JSON.stringify({ event, timestamp, data, signature: "" });
   const signature = createHmac("sha256", SECRET)

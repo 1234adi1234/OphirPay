@@ -369,8 +369,8 @@ event to a no-op branch.
 ## Reference
 
 - Event source of truth: `src/app/api/webhooks/event-types.ts`
-- Dispatch pipeline map: `src/lib/webhooks/index.ts`
-- Signing implementation: `src/lib/webhooks/signing.ts`
+- Dispatch pipeline map: `src/lib/webhook-dispatcher.ts`
+- Signing implementation: `src/lib/webhook-deliver.ts` (`buildSignedPayload`)
 - Receiver verification: `docs/webhook-verification.md` +
   `examples/webhook-verification/` (Node, Python, Go)
 - Signed example payloads: `examples/automation-payloads/` (regenerate with

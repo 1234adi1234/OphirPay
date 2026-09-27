@@ -28,7 +28,7 @@ This document is the reference for issue **#747** (timeout audit).
 | RPC failover probes (`rpc-failover.ts`) | `AbortController` + `getFailoverProbeTimeoutMs()`; failover-created servers also use the Soroban budget. |
 | Event source polling (`events/event-source.ts`) | `rpc.Server({ timeout })`. |
 | Price oracles (`price.ts`) | `AbortController` + `getPriceTimeoutMs()` per source, combined with a caller signal. |
-| Webhook delivery (`webhooks/delivery.ts`) | `fetchWithTimeout(…, { timeoutMs: getWebhookTimeoutMs() })`. |
+| Webhook delivery (`webhook-deliver.ts`) | `fetchWithTimeout(…, { timeoutMs: getWebhookTimeoutMs() })`. |
 
 The SDK-wide `Config.setTimeout(...)` is also set from
 `STELLAR_REQUEST_TIMEOUT_MS` so federation/Stellar TOML lookups inherit the
