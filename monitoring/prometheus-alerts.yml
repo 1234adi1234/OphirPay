@@ -162,6 +162,36 @@ groups:
             P95 query time is {{ $value }}s. Check for missing indexes
             or database resource pressure.
 
+      # ── Soroban RPC Failover Alerts (issue #820) ─────────────
+
+      - alert: RpcFailoverDegraded
+        expr: ophirpay_rpc_failover_active == 1
+        for: 2m
+        labels:
+          severity: warning
+          component: rpc
+        annotations:
+          summary: "Soroban RPC running on a non-primary endpoint"
+          description: |
+            OphirPay has been serving Soroban RPC traffic from a fallback
+            endpoint ({{ $labels.endpoint }}) for more than 2 minutes.
+            Failover count: {{ with printf "ophirpay_rpc_failover_total" | query }}
+            {{ . | first | value }}{{ end }}. Check the upstream provider
+            status and the rpcFailover block of GET /api/health.
+
+      - alert: RpcFailoverFrequent
+        expr: increase(ophirpay_rpc_failover_total[30m]) >= 3
+        for: 5m
+        labels:
+          severity: warning
+          component: rpc
+        annotations:
+          summary: "Soroban RPC flapping between endpoints"
+          description: |
+            {{ printf "%.0f" $value }} failovers in the last 30 minutes — the
+            primary endpoint is unstable. Verify the primary provider and the
+            probe results logged by the failover module.
+
       # ── Rate Limiting Alerts ─────────────────────────────────
 
       - alert: RateLimitHitsHigh

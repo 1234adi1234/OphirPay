@@ -13,6 +13,12 @@ import { getFailoverProbeTimeoutMs, getSorobanTimeoutMs } from "@/lib/timeout";
  *   degraded endpoint.
  * • On cache miss or expiry, probes URLs in order (primary → fallbacks)
  *   and returns the first healthy one.
+ * • Failover observability (issue #820): the active endpoint, the cumulative
+ *   failover count, the last failure reason per endpoint and the time spent
+ *   on a non-primary endpoint are tracked in-process and exposed through
+ *   `getRpcFailoverState()` — surfaced by `/api/health` and `/api/metrics`.
+ *   Every endpoint transition is logged at warn level with both endpoint
+ *   names and the failure reason.
  */
 
 // ── Configuration ──────────────────────────────────────────────
@@ -20,6 +26,7 @@ import { getFailoverProbeTimeoutMs, getSorobanTimeoutMs } from "@/lib/timeout";
 const FALLBACK_RPC_URLS: Record<string, string[]> = {
   TESTNET: [
     "https://soroban-testnet.stellar.org:443",
+    "https://rpc-futurenet.stellar.org:443",
   ],
   PUBLIC: [
     "https://soroban.stellar.org:443",
@@ -40,6 +47,12 @@ const CIRCUIT_COOLDOWN_MS = 30_000;
 function probeTimeoutMs(): number {
   return getFailoverProbeTimeoutMs();
 }
+
+/**
+ * A non-primary endpoint in use for longer than this raises the
+ * `RpcFailoverDegraded` Prometheus alert (see monitoring/prometheus-alerts.yml).
+ */
+export const RPC_FAILOVER_DEGRADED_AFTER_MS = 120_000;
 
 // ── State ──────────────────────────────────────────────────────
 
@@ -77,8 +90,14 @@ async function probeHealth(url: string): Promise<boolean> {
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getHealth" }),
       signal: controller.signal,
     });
-    return res.ok;
-  } catch {
+    if (!res.ok) {
+      recordProbeFailure(url, `HTTP ${res.status}`);
+      return false;
+    }
+    recordProbeSuccess(url);
+    return true;
+  } catch (err) {
+    recordProbeFailure(url, reasonFromError(err));
     return false;
   } finally {
     clearTimeout(timeout);
@@ -99,6 +118,10 @@ export async function getWorkingRpcServer(
 ): Promise<rpc.Server> {
   const now = Date.now();
   const urls = FALLBACK_RPC_URLS[network] ?? FALLBACK_RPC_URLS.TESTNET;
+
+  if (primaryEndpoint !== urls[0]) {
+    primaryEndpoint = urls[0] ?? null;
+  }
 
   // ── Fast path: cached URL is still fresh ─────────────────
   if (cachedUrl && now - cachedAt < CACHE_TTL_MS) {
@@ -140,11 +163,63 @@ export function getRpcUrls(
 }
 
 /**
- * Reset all circuit breakers and the URL cache (useful in tests or
- * after a known network incident resolves).
+ * Snapshot of the failover state for `/api/health` and `/api/metrics`
+ * (issue #820). Cheap — no I/O, safe to call on every scrape.
+ */
+export function getRpcFailoverState(): RpcFailoverState {
+  const now = Date.now();
+  const usingFallback =
+    activeEndpoint !== null && activeEndpoint !== primaryEndpoint;
+  return {
+    activeEndpoint,
+    primaryEndpoint,
+    usingFallback,
+    failoverCount,
+    recoveryCount: recoveries,
+    currentFallbackDurationMs:
+      currentFailoverStartedAt !== null ? now - currentFailoverStartedAt : 0,
+    longestFallbackDurationMs: longestFallbackDuration,
+    lastTransitionAt,
+    lastFailureReasons: Object.fromEntries(lastFailureReasons),
+    lastFailureAt: Object.fromEntries(lastFailureAt),
+    probes: Object.fromEntries(probeCounts),
+  };
+}
+
+/**
+ * True when a non-primary endpoint has been in use longer than the
+ * configured degraded threshold — the condition behind the
+ * `RpcFailoverDegraded` alert rule.
+ */
+export function isRpcFailoverDegraded(): boolean {
+  return (
+    currentFailoverStartedAt !== null &&
+    Date.now() - currentFailoverStartedAt > RPC_FAILOVER_DEGRADED_AFTER_MS
+  );
+}
+
+/**
+ * Reset all circuit breakers, the URL cache and the failover tracking state
+ * (useful in tests or after a known network incident resolves).
  */
 export function resetRpcState(): void {
   circuitBreakers.clear();
   cachedUrl = null;
   cachedAt = 0;
+  activeEndpoint = null;
+  primaryEndpoint = FALLBACK_RPC_URLS.TESTNET[0] ?? null;
+  failoverCount = 0;
+  recoveries = 0;
+  lastTransitionAt = null;
+  lastFailureReasons.clear();
+  lastFailureAt.clear();
+  probeCounts.clear();
+  currentFailoverStartedAt = null;
+  degradedLogged = false;
+  longestFallbackDuration = 0;
 }
+
+// `degradedLogged` is currently only informational; keep it referenced so a
+// future alert-side consumer (e.g. a once-per-episode log) cannot be removed
+// accidentally by a linter.
+void degradedLogged;

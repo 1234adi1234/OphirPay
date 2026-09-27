@@ -28,6 +28,29 @@ const counters = {
   sse_dropped_events_total: 0,
 };
 
+/** Last failover snapshot read by a scrape, for diffing gauge/counter gauges. */
+let lastRpcFailover: {
+  failoverCount: number;
+  recoveryCount: number;
+  activeEndpoint: string | null;
+  primaryEndpoint: string | null;
+  usingFallback: boolean;
+  currentFallbackDurationMs: number;
+  longestFallbackDurationMs: number;
+} | null = null;
+
+/** Store the latest RPC failover state so the metrics exposition stays consistent. */
+export function recordRpcFailoverState(state: NonNullable<typeof lastRpcFailover>): void {
+  lastRpcFailover = state;
+  counters.rpc_failover_total = state.failoverCount;
+  counters.rpc_failover_recoveries_total = state.recoveryCount;
+}
+
+/** Read the last recorded RPC failover state (null before the first record). */
+export function getRpcFailoverSnapshot(): typeof lastRpcFailover {
+  return lastRpcFailover;
+}
+
 export type MetricName = keyof typeof counters;
 export type DeliveryType = "webhook" | "batch";
 export type DeliveryFinalOutcome = "success" | "failure";
@@ -135,6 +158,7 @@ export function resetMetricsForTest(): void {
   }
   deliveryAttempts.clear();
   deliveryFinalOutcomes.clear();
+  lastRpcFailover = null;
 }
 
 // ── Per-endpoint latency histograms and error counts ──────────
