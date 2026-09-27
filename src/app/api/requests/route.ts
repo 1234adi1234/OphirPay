@@ -58,6 +58,7 @@ export const POST = withMetrics("POST /api/requests", withRequestLogging(async f
         assetIssuer: parsed.data.assetIssuer,
         description: parsed.data.description,
         recipientAddress: parsed.data.recipientAddress,
+        dueDate: parsed.data.dueDate || null,
         userId: auth.userId,
       },
     });
@@ -71,6 +72,7 @@ export const POST = withMetrics("POST /api/requests", withRequestLogging(async f
         amount: req.amount,
         assetCode: req.assetCode,
         description: req.description,
+        dueDate: req.dueDate ? req.dueDate.toISOString() : null,
         status: req.status,
         createdAt: req.createdAt.toISOString(),
       },

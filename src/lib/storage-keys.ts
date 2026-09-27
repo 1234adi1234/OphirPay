@@ -25,4 +25,6 @@ export const STORAGE_KEYS = {
   /** In-app notification center data & read status */
   NOTIFICATIONS: "ophirpay-notifications",
   NOTIFICATIONS_READ: "ophirpay-notifications-read",
+  /** User notification preferences (browser, email, request events) */
+  NOTIFICATION_PREFERENCES: "ophirpay-notification-preferences",
 } as const;

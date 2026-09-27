@@ -18,8 +18,9 @@ export function shortenAddress(address: string, chars = 4): string {
 /**
  * Format a number as XLM/USDC amount
  */
-export function formatAmount(amount: number, assetCode = "XLM"): string {
-  return `${amount.toLocaleString(undefined, {
+export function formatAmount(amount: number | string, assetCode = "XLM"): string {
+  const num = typeof amount === "number" ? amount : parseFloat(amount) || 0;
+  return `${num.toLocaleString(undefined, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 7,
   })} ${assetCode}`;
@@ -78,6 +79,12 @@ export function getStatusColor(
         bg: "bg-blue-50 dark:bg-blue-950/30",
         text: "text-blue-800 dark:text-blue-400",
         dot: "bg-blue-500",
+      };
+    case "OVERDUE":
+      return {
+        bg: "bg-red-50 dark:bg-red-950/40",
+        text: "text-red-700 dark:text-red-400 font-semibold",
+        dot: "bg-red-600 animate-pulse",
       };
     case "FAILED":
     case "CANCELLED":

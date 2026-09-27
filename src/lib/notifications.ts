@@ -17,7 +17,10 @@ export type PaymentEventType =
   | "payment.received"
   | "payment.batch_completed"
   | "payment.created"
-  | "payment.failed";
+  | "payment.failed"
+  | "request.overdue"
+  | "request.reminder"
+  | "request.paid";
 
 export interface PaymentNotification {
   id: string;
@@ -148,7 +151,13 @@ export function normalizePaymentEvent(raw: RawPaymentEventPayload): PaymentNotif
   const rawType = (raw.type || raw.event || "").toLowerCase().replace(":", ".");
   let type: PaymentEventType = "payment.created";
 
-  if (rawType.includes("sent")) {
+  if (rawType.includes("overdue")) {
+    type = "request.overdue";
+  } else if (rawType.includes("reminder")) {
+    type = "request.reminder";
+  } else if (rawType.includes("request.paid") || rawType.includes("request_paid")) {
+    type = "request.paid";
+  } else if (rawType.includes("sent")) {
     type = "payment.sent";
   } else if (rawType.includes("received")) {
     type = "payment.received";
@@ -186,6 +195,15 @@ export function normalizePaymentEvent(raw: RawPaymentEventPayload): PaymentNotif
 
   if (!title) {
     switch (type) {
+      case "request.overdue":
+        title = amount ? `Payment Request Overdue: ${amount}` : "Payment Request Overdue";
+        break;
+      case "request.reminder":
+        title = "Payment Request Reminder";
+        break;
+      case "request.paid":
+        title = amount ? `Payment Request Paid: ${amount}` : "Payment Request Paid";
+        break;
       case "payment.sent":
         title = amount ? `Payment Sent: ${amount}` : "Payment Sent";
         break;
@@ -207,6 +225,15 @@ export function normalizePaymentEvent(raw: RawPaymentEventPayload): PaymentNotif
 
   if (!message) {
     switch (type) {
+      case "request.overdue":
+        message = `Payment request for ${amount || "funds"} is now overdue.`;
+        break;
+      case "request.reminder":
+        message = `Reminder dispatched for payment request (${amount || "funds"}).`;
+        break;
+      case "request.paid":
+        message = `Payment request for ${amount || "funds"} has been paid.`;
+        break;
       case "payment.sent":
         message = payee
           ? `Sent ${amount || "payment"} to ${shortenAddress(payee, 4)}`
@@ -303,14 +330,76 @@ export function getUnreadCount(notifications: PaymentNotification[]): number {
   return notifications.filter((n) => !n.read).length;
 }
 
+// ── Notification Preferences ─────────────────────────────────────
+
+export interface NotificationPreferences {
+  enabled: boolean;
+  browserNotifications: boolean;
+  paymentEvents: boolean;
+  requestEvents: boolean;
+}
+
+export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
+  enabled: true,
+  browserNotifications: true,
+  paymentEvents: true,
+  requestEvents: true,
+};
+
+export function getNotificationPreferences(): NotificationPreferences {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return DEFAULT_NOTIFICATION_PREFERENCES;
+  }
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEYS.NOTIFICATION_PREFERENCES);
+    if (!raw) return DEFAULT_NOTIFICATION_PREFERENCES;
+    const parsed = JSON.parse(raw);
+    return { ...DEFAULT_NOTIFICATION_PREFERENCES, ...parsed };
+  } catch {
+    return DEFAULT_NOTIFICATION_PREFERENCES;
+  }
+}
+
+export function saveNotificationPreferences(
+  prefs: Partial<NotificationPreferences>
+): NotificationPreferences {
+  const current = getNotificationPreferences();
+  const updated: NotificationPreferences = { ...current, ...prefs };
+  if (typeof window !== "undefined" && window.localStorage) {
+    try {
+      window.localStorage.setItem(
+        STORAGE_KEYS.NOTIFICATION_PREFERENCES,
+        JSON.stringify(updated)
+      );
+    } catch {
+      // Quota exceeded or storage disabled — fail silently
+    }
+  }
+  return updated;
+}
+
 // ── Custom Event Dispatcher ──────────────────────────────────────
 
 /**
  * Emits an in-app payment notification event across the window.
- * Also triggers browser notification if permitted.
+ * Also triggers browser notification if permitted and enabled by preferences.
  */
 export function emitPaymentNotification(raw: RawPaymentEventPayload): PaymentNotification {
   const normalized = normalizePaymentEvent(raw);
+  const prefs = getNotificationPreferences();
+
+  // If notifications are globally or categorically disabled, return without dispatching
+  if (!prefs.enabled) {
+    return normalized;
+  }
+
+  if (normalized.type.startsWith("payment.") && !prefs.paymentEvents) {
+    return normalized;
+  }
+
+  if (normalized.type.startsWith("request.") && !prefs.requestEvents) {
+    return normalized;
+  }
 
   if (typeof window !== "undefined") {
     try {
@@ -324,11 +413,13 @@ export function emitPaymentNotification(raw: RawPaymentEventPayload): PaymentNot
     }
   }
 
-  // Also trigger browser notification
-  sendNotification(normalized.title, {
-    body: normalized.message,
-    tag: normalized.type,
-  });
+  // Also trigger browser notification if allowed by preferences
+  if (prefs.browserNotifications) {
+    sendNotification(normalized.title, {
+      body: normalized.message,
+      tag: normalized.type,
+    });
+  }
 
   return normalized;
 }
@@ -405,6 +496,34 @@ export const NOTIFY = {
       amount,
       title: "Batch Payment Complete",
       message: `Successfully sent payments to ${recipients} recipients.`,
+    });
+  },
+  requestOverdue: (amount: string, requestId?: string, symbol: string = "XLM") => {
+    emitPaymentNotification({
+      type: "request.overdue",
+      paymentId: requestId,
+      amount: `${amount} ${symbol}`,
+      title: `Payment Request Overdue: ${amount} ${symbol}`,
+      message: `Payment request for ${amount} ${symbol} has passed its due date.`,
+    });
+  },
+  requestPaid: (amount: string, requestId?: string, txHash?: string, symbol: string = "XLM") => {
+    emitPaymentNotification({
+      type: "request.paid",
+      paymentId: requestId,
+      amount: `${amount} ${symbol}`,
+      txHash,
+      title: `Payment Request Paid: ${amount} ${symbol}`,
+      message: `Payment request for ${amount} ${symbol} was successfully completed.`,
+    });
+  },
+  requestReminder: (amount: string, count: number, requestId?: string, symbol: string = "XLM") => {
+    emitPaymentNotification({
+      type: "request.reminder",
+      paymentId: requestId,
+      amount: `${amount} ${symbol}`,
+      title: "Payment Request Reminder",
+      message: `Reminder #${count} sent for payment request (${amount} ${symbol}).`,
     });
   },
 };

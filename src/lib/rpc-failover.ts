@@ -66,6 +66,139 @@ const circuitBreakers = new Map<string, CircuitState>();
 let cachedUrl: string | null = null;
 let cachedAt = 0;
 
+// ── Failover observability state (issue #820) ─────────────────
+
+/** The endpoint currently being served from (null until the first call). */
+let activeEndpoint: string | null = null;
+
+/** The endpoint an operator would expect: the first URL for the network. */
+let primaryEndpoint: string | null = FALLBACK_RPC_URLS.TESTNET[0] ?? null;
+
+/** Cumulative count of transitions to a non-primary endpoint. */
+let failoverCount = 0;
+
+/** Cumulative count of transitions back to the primary endpoint. */
+let recoveries = 0;
+
+/** Unix ms of the last transition (any direction). */
+let lastTransitionAt: number | null = null;
+
+/** Human-readable reason the last probe failed, per endpoint. */
+const lastFailureReasons = new Map<string, string>();
+
+/** Unix ms of the last failed probe per endpoint. */
+const lastFailureAt = new Map<string, number>();
+
+/** When the current (non-primary) failover episode began. */
+let currentFailoverStartedAt: number | null = null;
+
+/** Whether the current episode has already raised its transition log. */
+let degradedLogged = false;
+
+/** Probe-attempt counters per endpoint (cumulative). */
+const probeCounts = new Map<string, { total: number; failed: number }>();
+
+/** Exported failover snapshot (see `getRpcFailoverState`). */
+export interface RpcFailoverState {
+  /** Endpoint currently serving requests; null before the first RPC call. */
+  activeEndpoint: string | null;
+  /** First configured endpoint for the network. */
+  primaryEndpoint: string | null;
+  /**
+   * True while serving from a non-primary endpoint; false before the first
+   * RPC call and whenever the primary endpoint is serving.
+   */
+  usingFallback: boolean;
+  /** Cumulative transitions away from the primary endpoint. */
+  failoverCount: number;
+  /** Cumulative transitions back to the primary endpoint. */
+  recoveryCount: number;
+  /** How long the current fallback episode has been running (ms), 0 when primary. */
+  currentFallbackDurationMs: number;
+  /** Longest fallback episode observed since process start (ms). */
+  longestFallbackDurationMs: number;
+  /** Unix ms of the last endpoint transition. */
+  lastTransitionAt: number | null;
+  /** Last failure reason per endpoint that failed at least once. */
+  lastFailureReasons: Record<string, string>;
+  /** Unix ms of the last failed probe per endpoint. */
+  lastFailureAt: Record<string, number>;
+  /** Cumulative probe attempts / failures per endpoint. */
+  probes: Record<string, { total: number; failed: number }>;
+}
+
+function reasonFromError(err: unknown): string {
+  if (err instanceof Error) {
+    if (err.name === "AbortError" || err.name === "TimeoutError") {
+      return "timeout";
+    }
+    return err.message || err.name;
+  }
+  return String(err);
+}
+
+/** Record a failed probe for observability. */
+function recordProbeFailure(url: string, reason: string): void {
+  lastFailureReasons.set(url, reason);
+  lastFailureAt.set(url, Date.now());
+  const counts = probeCounts.get(url) ?? { total: 0, failed: 0 };
+  counts.total += 1;
+  counts.failed += 1;
+  probeCounts.set(url, counts);
+}
+
+/** Record a successful probe for observability. */
+function recordProbeSuccess(url: string): void {
+  const counts = probeCounts.get(url) ?? { total: 0, failed: 0 };
+  counts.total += 1;
+  probeCounts.set(url, counts);
+}
+
+/**
+ * Update the tracked active endpoint, counting and logging every transition.
+ * Logged at warn level with both endpoint names and the failure reason so an
+ * operator watching logs sees exactly why traffic moved (issue #820).
+ */
+function setActiveEndpoint(nextUrl: string, reason: string): void {
+  const previous = activeEndpoint;
+  activeEndpoint = nextUrl;
+  const primary = primaryEndpoint;
+  if (previous === nextUrl) return;
+
+  const now = Date.now();
+  lastTransitionAt = now;
+  const wasOnPrimary = previous === null || previous === primary;
+  const isOnPrimary = nextUrl === primary;
+
+  if (!isOnPrimary && wasOnPrimary) {
+    failoverCount += 1;
+    currentFailoverStartedAt = now;
+    degradedLogged = false;
+    logger.warn("RPC failover: switching endpoints", {
+      from: previous ?? "(none)",
+      to: nextUrl,
+      reason,
+      failoverCount,
+    });
+  } else if (isOnPrimary && previous !== null) {
+    recoveries += 1;
+    if (currentFailoverStartedAt !== null) {
+      const durationMs = now - currentFailoverStartedAt;
+      if (durationMs > longestFallbackDuration) longestFallbackDuration = durationMs;
+      logger.warn("RPC failover: recovered to primary endpoint", {
+        from: previous,
+        to: nextUrl,
+        reason,
+        fallbackDurationMs: durationMs,
+      });
+      currentFailoverStartedAt = null;
+    }
+  }
+}
+
+/** Longest fallback episode observed since process start (ms). */
+let longestFallbackDuration = 0;
+
 /**
  * Create an RPC server with an explicit, configurable request timeout so a
  * degraded endpoint aborts instead of hanging the request (issue #747).
@@ -125,6 +258,7 @@ export async function getWorkingRpcServer(
 
   // ── Fast path: cached URL is still fresh ─────────────────
   if (cachedUrl && now - cachedAt < CACHE_TTL_MS) {
+    setActiveEndpoint(cachedUrl, "cache hit");
     return createRpcServer(cachedUrl);
   }
 
@@ -140,6 +274,7 @@ export async function getWorkingRpcServer(
       cachedUrl = url;
       cachedAt = now;
       circuitBreakers.delete(url);
+      setActiveEndpoint(url, "health probe succeeded");
       return createRpcServer(url);
     }
 
@@ -150,6 +285,7 @@ export async function getWorkingRpcServer(
 
   // ── All endpoints failed or in cooldown ─────────────────
   logger.error("All RPC endpoints unavailable — falling back to primary");
+  setActiveEndpoint(urls[0], "all endpoints failed");
   return createRpcServer(urls[0]);
 }
 

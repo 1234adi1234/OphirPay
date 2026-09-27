@@ -14,11 +14,13 @@ export interface PaymentLinkParams {
   memo?: string;
   assetCode?: string;
   message?: string;
+  dueDate?: string;
+  requestId?: string;
 }
 
 /**
  * Generate a payment link URL that can be shared.
- * Uses the /pay/[address] route with optional amount/memo/asset query params.
+ * Uses the /pay/[address] route with optional amount/memo/asset/due/requestId query params.
  */
 export function generatePaymentLink(params: PaymentLinkParams): string {
   const base = process.env.NEXT_PUBLIC_APP_URL || "https://ophirpay.vercel.app";
@@ -27,6 +29,8 @@ export function generatePaymentLink(params: PaymentLinkParams): string {
   if (params.amount) url.searchParams.set("amount", params.amount);
   if (params.memo) url.searchParams.set("memo", params.memo);
   if (params.assetCode) url.searchParams.set("asset", params.assetCode);
+  if (params.dueDate) url.searchParams.set("due", params.dueDate);
+  if (params.requestId) url.searchParams.set("requestId", params.requestId);
 
   return url.toString();
 }
@@ -57,6 +61,10 @@ export function parsePaymentLink(
   if (memo) params.memo = memo;
   const assetCode = parsed.searchParams.get("asset");
   if (assetCode) params.assetCode = assetCode;
+  const dueDate = parsed.searchParams.get("due") || parsed.searchParams.get("dueDate");
+  if (dueDate) params.dueDate = dueDate;
+  const requestId = parsed.searchParams.get("requestId");
+  if (requestId) params.requestId = requestId;
 
   return params;
 }

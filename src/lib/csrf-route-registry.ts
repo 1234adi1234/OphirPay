@@ -59,6 +59,7 @@ export const MUTATING_ROUTES: CsrfRouteEntry[] = [
   { method: "PATCH", path: "/api/recurring", routeFile: "recurring/route.ts", description: "Update recurrence settings" },
   { method: "PATCH", path: "/api/recurring/[id]", routeFile: "recurring/[id]/route.ts", description: "Update recurring schedule" },
   { method: "POST", path: "/api/requests", routeFile: "requests/route.ts", description: "Create payment request" },
+  { method: "POST", path: "/api/requests/[id]/remind", routeFile: "requests/[id]/remind/route.ts", description: "Send rate-limited payment request reminder" },
 
   // Scheduled payments
   { method: "POST", path: "/api/scheduled", routeFile: "scheduled/route.ts", description: "Create scheduled payment" },
@@ -139,5 +140,11 @@ export const CSRF_EXEMPT_ROUTES: CsrfExemptRoute[] = [
     path: "/api/scheduled/run",
     routeFile: "scheduled/run/route.ts",
     reason: "Scheduled-payment runner; authenticated by CRON_SECRET, not a browser session.",
+  },
+  {
+    method: "POST",
+    path: "/api/requests/expire",
+    routeFile: "requests/expire/route.ts",
+    reason: "Scheduler/cron worker sweep for overdue payment requests; machine-triggered.",
   },
 ];

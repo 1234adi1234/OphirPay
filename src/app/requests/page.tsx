@@ -23,6 +23,9 @@ interface RequestData {
   status: string;
   description?: string;
   recipientAddress?: string;
+  dueDate?: string;
+  remindersCount?: number;
+  lastReminderAt?: string;
   transactionHash?: string;
   createdAt: string;
   updatedAt: string;
@@ -33,6 +36,7 @@ interface CreateRequestBody {
   assetCode: string;
   description?: string;
   recipientAddress?: string;
+  dueDate?: string;
 }
 
 const QR_API = "https://api.qrserver.com/v1/create-qr-code";
@@ -49,12 +53,15 @@ export default function RequestsPage() {
   const [formAsset, setFormAsset] = useState("XLM");
   const [formDescription, setFormDescription] = useState("");
   const [formAddress, setFormAddress] = useState("");
+  const [formDueDate, setFormDueDate] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [remindingId, setRemindingId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
 
   const {
     data: rawRequests,
     isLoading: loading,
+    refetch,
   } = useApiQuery<RequestData[]>(["requests"], "/api/requests");
   const requests = Array.isArray(rawRequests) ? rawRequests : [];
 
@@ -78,6 +85,7 @@ export default function RequestsPage() {
         assetCode: formAsset,
         description: formDescription || undefined,
         recipientAddress: formAddress || wallet.publicKey || undefined,
+        dueDate: formDueDate ? new Date(formDueDate).toISOString() : undefined,
       });
       setShowCreate(false);
       resetForm();
@@ -90,11 +98,35 @@ export default function RequestsPage() {
     }
   };
 
+  const handleSendReminder = async (id: string) => {
+    setRemindingId(id);
+    try {
+      const res = await fetch(`/api/requests/${id}/remind`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || "Failed to send reminder");
+      }
+      toast.success(
+        "Reminder sent",
+        `Reminder #${data.data.remindersCount} dispatched successfully.`
+      );
+      refetch();
+    } catch (err: unknown) {
+      toast.error("Reminder failed", err instanceof Error ? err.message : String(err));
+    } finally {
+      setRemindingId(null);
+    }
+  };
+
   const resetForm = () => {
     setFormAmount("");
     setFormAsset("XLM");
     setFormDescription("");
     setFormAddress("");
+    setFormDueDate("");
     setFormError(null);
   };
 
@@ -104,6 +136,8 @@ export default function RequestsPage() {
       amount: req.amount.toString(),
       assetCode: req.assetCode,
       message: req.description,
+      dueDate: req.dueDate,
+      requestId: req.id,
     });
   };
 
@@ -183,6 +217,11 @@ export default function RequestsPage() {
                       {formatAmount(req.amount, req.assetCode)}
                     </span>
                     <StatusBadge status={req.status} />
+                    {req.dueDate && (req.status === "OVERDUE" || (req.status === "PENDING" && new Date(req.dueDate) < new Date())) && (
+                      <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 dark:bg-red-950/50 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-900">
+                        Overdue
+                      </span>
+                    )}
                   </div>
                   {req.description && (
                     <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
@@ -191,12 +230,26 @@ export default function RequestsPage() {
                   )}
                   <div className="flex items-center gap-3 text-xs text-gray-400">
                     <span>
-                      {new Date(req.createdAt).toLocaleDateString(undefined, {
+                      Created: {new Date(req.createdAt).toLocaleDateString(undefined, {
                         month: "short",
                         day: "numeric",
                         year: "numeric",
                       })}
                     </span>
+                    {req.dueDate && (
+                      <span className={new Date(req.dueDate) < new Date() && req.status !== "PAID" ? "text-red-500 font-medium" : ""}>
+                        Due: {new Date(req.dueDate).toLocaleDateString(undefined, {
+                          month: "short",
+                          day: "numeric",
+                          year: "numeric",
+                        })}
+                      </span>
+                    )}
+                    {typeof req.remindersCount === "number" && req.remindersCount > 0 && (
+                      <span className="text-amber-600 dark:text-amber-400 font-medium">
+                        Reminders: {req.remindersCount}
+                      </span>
+                    )}
                     {req.transactionHash && (
                       <span className="font-mono text-green-600 dark:text-green-400">
                         Paid
@@ -205,6 +258,15 @@ export default function RequestsPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
+                  {(req.status === "PENDING" || req.status === "OVERDUE") && (
+                    <button
+                      onClick={() => handleSendReminder(req.id)}
+                      disabled={remindingId === req.id}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/30 border border-amber-300 dark:border-amber-800 transition-colors disabled:opacity-50"
+                    >
+                      {remindingId === req.id ? "Sending..." : req.remindersCount ? `Remind (${req.remindersCount})` : "Send Reminder"}
+                    </button>
+                  )}
                   <button
                     onClick={() => {
                       const link = getPaymentLink(req);
@@ -322,6 +384,18 @@ export default function RequestsPage() {
               onChange={(e) => setFormAddress(e.target.value)}
               placeholder={wallet.publicKey || "G..."}
               className="w-full px-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-ophir-500 focus:border-transparent"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
+              Due Date <span className="text-gray-400 font-normal">(optional — expiration & overdue alerts)</span>
+            </label>
+            <input
+              type="date"
+              value={formDueDate}
+              onChange={(e) => setFormDueDate(e.target.value)}
+              className="w-full px-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 text-sm focus:outline-none focus:ring-2 focus:ring-ophir-500 focus:border-transparent"
             />
           </div>
 

@@ -455,6 +455,14 @@ model PaymentRequest {
   recipientAddress String?
   /// Lifecycle status (see RequestStatus enum).
   status        RequestStatus @default(PENDING)
+  /// Optional due date for the payment request; triggers overdue transition once passed.
+  dueDate       DateTime?
+  /// Number of reminders sent to the payer/recipient.
+  remindersCount Int      @default(0)
+  /// Last time a reminder was dispatched (used for rate-limiting).
+  lastReminderAt DateTime?
+  /// When overdue notification was dispatched (ensures exactly-once notification).
+  overdueNotifiedAt DateTime?
   /// Transaction hash once the request is paid.
   transactionHash String?
   /// When the request was created.
@@ -475,6 +483,8 @@ enum RequestStatus {
   PENDING
   /// Paid — transactionHash is set.
   PAID
+  /// Passed its due date without being paid.
+  OVERDUE
   /// Passed its expiry without being paid.
   EXPIRED
   /// Cancelled by the creator before payment.
