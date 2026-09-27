@@ -22,7 +22,10 @@
  *    - When price source is unreachable, returns null / "Unavailable" / fallback string.
  */
 
+import { getPriceTimeoutMs } from "./timeout";
+
 export const PRICE_CACHE_TTL_MS = 60_000; // 60 seconds
+/** Default when `PRICE_REQUEST_TIMEOUT_MS` is unset (see `lib/timeout.ts`). */
 export const DEFAULT_PRICE_TIMEOUT_MS = 5_000; // 5 seconds
 
 export const ROUNDING_RULES = {
@@ -85,7 +88,8 @@ export async function fetchXlmPrice(options?: {
   signal?: AbortSignal;
 }): Promise<PriceResult> {
   const ttl = options?.ttlMs ?? PRICE_CACHE_TTL_MS;
-  const timeoutMs = options?.timeoutMs ?? DEFAULT_PRICE_TIMEOUT_MS;
+  // Configurable per environment (`PRICE_REQUEST_TIMEOUT_MS`), issue #747.
+  const timeoutMs = options?.timeoutMs ?? getPriceTimeoutMs();
   const now = Date.now();
 
   // 1. Check in-memory cache

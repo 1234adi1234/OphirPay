@@ -1871,15 +1871,36 @@ paths:
   /api/events/history:
     get:
       tags: [Events]
-      summary: Fetch on-chain payment event history
+      summary: Fetch on-chain payment event history (cursor paginated)
+      description: |
+        Returns on-chain `payment.created` events newest-first by on-chain id
+        (`id DESC`). Pagination follows the same opaque keyset-cursor convention
+        as `GET /api/payments`: pass `limit` (1–100, default 50) and the
+        `meta.nextCursor` value from the previous response as `cursor`. The
+        response envelope carries `meta.nextCursor` (null on the last page) and
+        `meta.hasMore`, so clients catching up after a disconnect can walk the
+        history without re-reading or skipping records.
       parameters:
         - name: limit
           in: query
-          schema: { type: integer, default: 50, maximum: 200 }
-          description: Number of recent events to return
+          schema: { type: integer, default: 50, minimum: 1, maximum: 100 }
+          description: Number of events to return (maximum 100)
+        - name: cursor
+          in: query
+          schema: { type: string }
+          description: >-
+            Opaque keyset cursor from a previous response's `meta.nextCursor`.
+            Paginates strictly below the last event id of that page. An invalid
+            cursor returns 400.
       responses:
         "200":
-          description: Recent event history
+          description: Event history page with cursor meta
+        "400":
+          description: Invalid cursor or limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   # ── Health ────────────────────────────────────────────────
   /api/health:

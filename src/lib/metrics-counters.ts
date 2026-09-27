@@ -20,6 +20,12 @@ const counters = {
   db_query_duration_seconds_count: 0,
   /** Gauge: currently open SSE event-stream connections (inc on connect, dec on disconnect). */
   sse_open_connections: 0,
+  /**
+   * Counter: SSE events shed because a slow/stalled consumer exhausted its
+   * bounded outbound buffer (issue #744). A rising value with a flat
+   * `sse_open_connections` means clients are being out-paced by the stream.
+   */
+  sse_dropped_events_total: 0,
 };
 
 export type MetricName = keyof typeof counters;

@@ -88,3 +88,7 @@ ophirpay_process_heap_total_bytes 0
 # HELP ophirpay_sse_open_connections Currently open SSE event-stream connections
 # TYPE ophirpay_sse_open_connections gauge
 ophirpay_sse_open_connections 0
+
+# HELP ophirpay_sse_dropped_events_total SSE events shed by the bounded slow-consumer buffer
+# TYPE ophirpay_sse_dropped_events_total counter
+ophirpay_sse_dropped_events_total 0
