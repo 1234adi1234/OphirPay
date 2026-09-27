@@ -2,6 +2,7 @@
 
 import { rpc } from "@stellar/stellar-sdk";
 import { logger } from "@/lib/logger";
+import { getFailoverProbeTimeoutMs, getSorobanTimeoutMs } from "@/lib/timeout";
 
 /**
  * Soroban RPC failover with caching and circuit breaking.
@@ -32,8 +33,13 @@ const CACHE_TTL_MS = 60_000;
 /** How long a failed endpoint is excluded from probing. */
 const CIRCUIT_COOLDOWN_MS = 30_000;
 
-/** Timeout for individual health-check probes. */
-const PROBE_TIMEOUT_MS = 3_000;
+/**
+ * Timeout for individual health-check probes. Configurable via
+ * `RPC_PROBE_TIMEOUT_MS` (see `lib/timeout.ts`, issue #747).
+ */
+function probeTimeoutMs(): number {
+  return getFailoverProbeTimeoutMs();
+}
 
 // ── State ──────────────────────────────────────────────────────
 
@@ -47,11 +53,22 @@ const circuitBreakers = new Map<string, CircuitState>();
 let cachedUrl: string | null = null;
 let cachedAt = 0;
 
+/**
+ * Create an RPC server with an explicit, configurable request timeout so a
+ * degraded endpoint aborts instead of hanging the request (issue #747).
+ */
+function createRpcServer(url: string): rpc.Server {
+  return new rpc.Server(url, {
+    allowHttp: false,
+    timeout: getSorobanTimeoutMs(),
+  });
+}
+
 // ── Probe ──────────────────────────────────────────────────────
 
 async function probeHealth(url: string): Promise<boolean> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), probeTimeoutMs());
 
   try {
     const res = await fetch(url, {
@@ -85,7 +102,7 @@ export async function getWorkingRpcServer(
 
   // ── Fast path: cached URL is still fresh ─────────────────
   if (cachedUrl && now - cachedAt < CACHE_TTL_MS) {
-    return new rpc.Server(cachedUrl, { allowHttp: false });
+    return createRpcServer(cachedUrl);
   }
 
   // ── Probe URLs, skipping those in circuit-breaker cooldown ─
@@ -100,7 +117,7 @@ export async function getWorkingRpcServer(
       cachedUrl = url;
       cachedAt = now;
       circuitBreakers.delete(url);
-      return new rpc.Server(url, { allowHttp: false });
+      return createRpcServer(url);
     }
 
     // Mark as failed — enter cooldown
@@ -110,7 +127,7 @@ export async function getWorkingRpcServer(
 
   // ── All endpoints failed or in cooldown ─────────────────
   logger.error("All RPC endpoints unavailable — falling back to primary");
-  return new rpc.Server(urls[0], { allowHttp: false });
+  return createRpcServer(urls[0]);
 }
 
 /**

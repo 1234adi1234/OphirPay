@@ -24,6 +24,13 @@ series instead of one series per concrete id.
 | --- | --- | --- | --- |
 | `ophirpay_endpoint_request_duration_seconds` | histogram | `method`, `endpoint`, `status_class`, `le` | Request latency per endpoint + status class |
 | `ophirpay_endpoint_errors_total` | counter | `method`, `endpoint`, `status_class` | Error counts per endpoint + status class |
+| `ophirpay_sse_open_connections` | gauge | — | Currently open SSE event-stream connections (both `/api/events` and `/api/audit-log/sse`) |
+| `ophirpay_sse_dropped_events_total` | counter | — | SSE events shed by the bounded slow-consumer buffer (issue #744) |
+
+> **Slow consumers (issue #744).** A rising `ophirpay_sse_dropped_events_total`
+> with a flat `ophirpay_sse_open_connections` means connected clients cannot keep
+> up with the stream and their bounded buffers are shedding data. See
+> `docs/SSE.md` for the drop-oldest policy and the per-connection ceilings.
 
 Example scrape output:
 
