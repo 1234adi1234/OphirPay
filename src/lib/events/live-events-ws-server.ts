@@ -9,6 +9,8 @@
  * transports deliver the identical event stream. When this server isn't
  * reachable (e.g. serverless deploys), the client automatically falls back
  * to the SSE route.
+ *
+ * @see docs/WEBSOCKET.md for protocol, message schemas, and deployment specs.
  */
 
 import http from "node:http";

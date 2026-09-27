@@ -81,6 +81,7 @@
 - [📊 Database Schema](docs/SCHEMA.md)
 - [🚀 Deployment Guide](docs/DEPLOYMENT.md)
 - [📡 SSE Event Stream](docs/SSE.md)
+- [⚡ WebSocket Event Server](docs/WEBSOCKET.md)
 - [📖 SSE Integration & Architecture](docs/SSE_DOCUMENTATION.md)
 - [📜 Smart-contract SSE Reference](docs/CONTRACT_SSE_REFERENCE.md)
 - [🧪 Prisma CI & Testing](docs/PRISMA-CI.md)
@@ -351,13 +352,13 @@ connect("albedo");  // or "freighter", "xbull"
 
 ## 📡 Real-Time Events
 
-OphirPay streams **live blockchain events** via Server-Sent Events (SSE). The endpoint polls the deployed `PaymentEventEmitter` contract every 10 seconds, detecting new payment events and pushing them to connected clients.
+OphirPay delivers **live blockchain events** through a resilient dual-transport architecture. A standalone **WebSocket server** (`ws(s)://<host>:8787/api/events`) provides low-latency push delivery with automatic keep-alive pings, while a **Server-Sent Events (SSE)** endpoint (`GET /api/events`) acts as the transparent HTTP fallback. Both transports share the identical event payload schema sourced from the deployed `PaymentEventEmitter` Soroban contract.
 
 ```
-Browser ←──SSE stream─── GET /api/events ──polls──→ PaymentEventEmitter (Soroban)
-                                                      ↓
-                                                 get_event_count()
-                                                 get_event(id)
+Browser ←── WS:  ws(s)://<host>:8787/api/events ──polls──→ PaymentEventEmitter (Soroban)
+        ←── SSE: GET /api/events (fallback)                 ↓
+                                                       get_event_count()
+                                                       get_event(id)
 ```
 
 **Events emitted:**
@@ -365,14 +366,14 @@ Browser ←──SSE stream─── GET /api/events ──polls──→ Paymen
 | Event | Trigger |
 |---|---|
 | `connected` | Stream established |
-| `heartbeat` | Every 15 seconds (keep-alive) |
+| `heartbeat` | Every 15 seconds (SSE) / 30 seconds (WS keep-alive) |
 | `payment:created` | New payment event detected on-chain |
 
 Visit **`/events`** in the app to see the live feed with connection status indicator, event type badges, timestamps, and auto-scroll.
 
-> 📡 **Client integrations:** see [docs/SSE.md](docs/SSE.md) for the full stream
-> contract — payload schemas for every event type, heartbeat/error behavior,
-> reconnection semantics, and example client code (browser, React, cURL).
+> ⚡ **WebSocket server & protocol:** see [docs/WEBSOCKET.md](docs/WEBSOCKET.md) for the standalone RFC 6455 WebSocket implementation, message schemas, reconnection and fallback lifecycle, port configuration, and deployment architecture.
+>
+> 📡 **Client integrations (SSE):** see [docs/SSE.md](docs/SSE.md) for the full Server-Sent Events stream contract, payload schemas, reconnection semantics, and load testing guide.
 
 ---
 
