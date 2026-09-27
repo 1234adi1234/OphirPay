@@ -20,15 +20,26 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
+      testIgnore: /.*service-worker\.spec\.ts/,
       use: { ...devices["Desktop Chrome"] },
     },
     {
       name: "firefox",
+      testIgnore: /.*service-worker\.spec\.ts/,
       use: { ...devices["Desktop Firefox"] },
     },
     {
       name: "mobile-chrome",
+      testIgnore: /.*service-worker\.spec\.ts/,
       use: { ...devices["Pixel 5"] },
+    },
+    {
+      name: "service-worker",
+      testMatch: /.*service-worker\.spec\.ts/,
+      use: {
+        ...devices["Desktop Chrome"],
+        serviceWorkers: "allow",
+      },
     },
   ],
   // Note: playwright.config.ts intentionally has no webServer block.

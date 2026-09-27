@@ -319,8 +319,8 @@ summary and as a sticky PR comment:
 
 | Contract | Baseline (bytes) | New (bytes) | Δ bytes | Δ % | Absolute guardrail |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `ophirpay` | 155899 | … | +N | +x.xx% | new / 524288 |
-| `emitter` | 25186 | … | +N | +x.xx% | new / 262144 |
+| `ophirpay` | 172364 | … | +N | +x.xx% | new / 524288 |
+| `emitter` | 25182 | … | +N | +x.xx% | new / 262144 |
 
 alongside a fee table diffing `calculate_fee()` outputs against
 `contracts/fee-baseline.json` (produced by
@@ -329,8 +329,8 @@ alongside a fee table diffing `calculate_fee()` outputs against
 The workflow measures the artifact **as the workflow builds it** — plain
 `cargo build --release --target wasm32v1-none`, with no `wasm-strip`/
 `wasm-opt` pass. Commit that number, not the optimized one from the table
-above; the two differ by ~40 % (at the time of writing: `ophirpay` 155,899 raw
-vs 94,096 optimized, `emitter` 25,186 raw vs 7,338 optimized).
+above; the two differ by ~40 % (at the time of writing: `ophirpay` 170,007 raw
+vs 94,096 optimized, `emitter` 25,182 raw vs 7,338 optimized).
 
 ### Thresholds
 

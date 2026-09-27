@@ -69,7 +69,7 @@ cp .env.example .env.local
 | `RATE_LIMIT_RPM` | `120` | Requests per minute per IP (global proxy limit) |
 | `AUTH_RATE_LIMIT_IP_RPM` | `30` | Wallet-auth per-IP requests per minute (`/api/auth/challenge`, `/api/auth/session`) |
 | `AUTH_RATE_LIMIT_WALLET_RPM` | `10` | Wallet-auth per-account requests per minute (keyed by Stellar public key) |
-| `REDIS_URL` | — | Redis URL for distributed rate limiting |
+| `REDIS_URL` | — | Distributed rate limiting. `redis://` = ioredis (Node only); `https://` = Upstash-compatible REST and the only form that shares the *global edge* limit across replicas |
 | `NEXT_PUBLIC_SENTRY_DSN` | — | Sentry error tracking DSN |
 | `NEXT_PUBLIC_DEMO_MODE` | `false` | Enable demo mode |
 | `NEXT_PUBLIC_FEATURE_MULTI_ASSET` | `false` | Enable multi-asset support |
@@ -215,15 +215,118 @@ The `Dockerfile` uses a 3-stage build:
 
 | Stage | Base Image | Purpose |
 |---|---|---|
-| `deps` | `node:24-slim` | Install npm dependencies (with OpenSSL for Prisma) |
-| `builder` | `node:24-slim` | Generate Prisma client, run `next build` |
-| `runner` | `gcr.io/distroless/nodejs20-debian12:nonroot` | Minimal production image (non-root user) |
+| `deps` | `node:20-slim` | Install npm dependencies (with OpenSSL for Prisma) |
+| `builder` | `node:20-slim` | Generate Prisma client, run `next build` |
+| `runner` | `node:20-slim` | Minimal production image, runs as the non-root `node` user |
 
 **Key details:**
 - Uses **Debian (glibc)**, not Alpine (musl) — Tailwind v4's native binaries require glibc
 - Puppeteer download is skipped (`PUPPETEER_SKIP_DOWNLOAD=true`) — not needed for production
 - Final image runs as **non-root** user for security
 - Standalone output is used (configured in `next.config.ts`)
+- The runner stage declares a `HEALTHCHECK` (issue #738) — see below
+
+### Published release images & verification (issues #749, #750)
+
+Prebuilt multi-arch images (`linux/amd64`, `linux/arm64`) are published to GHCR
+by [`.github/workflows/release.yml`](../.github/workflows/release.yml) whenever a
+`v*.*.*` tag is pushed:
+
+```text
+ghcr.io/ophirpay/ophirpay:v0.X.0     # immutable semantic version (pin this)
+ghcr.io/ophirpay/ophirpay:sha-<sha>  # specific commit build
+ghcr.io/ophirpay/ophirpay:latest     # moving tag — convenience only
+```
+
+The k8s manifest and the Helm chart pin `v0.1.0` with
+`imagePullPolicy: IfNotPresent`, so a pod restart always resolves to the same
+digest. Prefer the digest form in production:
+
+```bash
+# Deploy a specific, verified digest
+helm upgrade ophirpay helm/ophirpay \
+  --set image.repository=ghcr.io/ophirpay/ophirpay \
+  --set image.tag=sha256:<digest> --set image.pullPolicy=IfNotPresent
+```
+
+**What ships, and from which commit.** Each release image carries an SBOM and a
+build provenance attestation, and is keyless-signed with cosign. To verify a
+digest before deploying it:
+
+```bash
+# 1. Resolve the tag -> digest
+docker buildx imagetools inspect ghcr.io/ophirpay/ophirpay:v0.X.0
+
+# 2. Verify provenance: was this digest built by the release workflow from
+#    this repository? (GitHub CLI >= 2.49)
+gh attestation verify \
+  oci://ghcr.io/ophirpay/ophirpay@sha256:<digest> --repo OphirPay/OphirPay
+
+# 3. Read the SBOM BuildKit attached to the image
+docker buildx imagetools inspect \
+  ghcr.io/ophirpay/ophirpay:v0.X.0 --format '{{ json .SBOM }}'
+
+# 4. Or verify the keyless cosign signature
+cosign verify \
+  --certificate-identity-regexp '^https://github.com/OphirPay/OphirPay/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/ophirpay/ophirpay:v0.X.0
+```
+
+The same procedure is documented from the maintainer's point of view in
+[RELEASE.md](../RELEASE.md) → "Verifying a release artifact".
+
+### Liveness vs readiness
+
+OphirPay exposes two probes with deliberately different meanings. They are
+**not** interchangeable: wiring the dependency-aware check to a liveness probe
+lets a transient Postgres/Soroban/Redis outage restart-loop a perfectly healthy
+container.
+
+| Probe | Endpoint | Checks | Failure meaning |
+|---|---|---|---|
+| **Liveness** | `GET /api/health/live` | Process is up and serving HTTP. No database, RPC, Horizon or Redis I/O | The process is wedged — restarting it is the right response |
+| **Readiness** | `GET /api/health` | Database (`SELECT 1`, critical, 503 when down), Soroban RPC + Horizon reachability, Redis ping when `REDIS_URL` is set, and the configured contract ID | A dependency is unavailable — stop routing traffic, do **not** restart |
+
+Both paths are exempt from the global rate limiter (`src/proxy.ts`) so
+orchestrators can poll them even while the app is under load.
+
+**Docker / Docker Compose.** The image ships a `HEALTHCHECK` that probes the
+liveness endpoint with the bundled `node` (the runner image has neither a shell
+nor `curl`/`wget`, so a `node -e 'fetch(...)'` exec-form check is the only
+portable client):
+
+```bash
+docker compose up -d
+docker inspect --format '{{.State.Health.Status}}' ophirpay-app-1   # healthy
+docker inspect --format '{{json .State.Health}}' ophirpay-app-1 | jq .
+```
+
+The healthcheck uses `--interval=30s --timeout=5s --start-period=20s
+--retries=3`, and `docker-compose.yml` restates the same timings next to the
+`db`/`redis` healthchecks so they are easy to tune together.
+
+**Kubernetes / Helm.** The same split is wired in `k8s/deployment.yaml` and
+`helm/ophirpay/values.yaml`:
+
+```yaml
+livenessProbe:                     # process only — never restarts on a DB blip
+  httpGet:
+    path: /api/health/live
+    port: 3000
+  initialDelaySeconds: 30
+  periodSeconds: 15
+  timeoutSeconds: 5
+  failureThreshold: 3
+readinessProbe:                    # dependency-aware — drains traffic on 503
+  httpGet:
+    path: /api/health
+    port: 3000
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 2
+```
 
 ---
 
@@ -326,7 +429,10 @@ server {
 
 ## Option 4: Kubernetes (Helm)
 
-A Helm chart is included in `helm/ophirpay/`.
+A Helm chart is included in `helm/ophirpay/`. See the detailed
+[Kubernetes guide](KUBERNETES.md) for prerequisites, secret provisioning,
+build-time `NEXT_PUBLIC_*` behavior, migrations, probes, ingress/TLS, and the
+pre-flight validation checklist.
 
 ### Deploy with Helm
 
@@ -377,6 +483,53 @@ kubectl get pods -n ophirpay
 kubectl get ingress -n ophirpay
 curl https://ophirpay.com/api/health
 ```
+
+---
+
+## Database backups & the restore drill
+
+Nightly PostgreSQL backups are produced by
+[`.github/workflows/db-backup.yml`](../.github/workflows/db-backup.yml) and
+stored in the `ophirpay-backups` S3 bucket. A backup is only trusted when it has
+been restored at least once, so the same backup is verified automatically.
+
+### Run the restore drill
+
+[`.github/workflows/db-restore-drill.yml`](../.github/workflows/db-restore-drill.yml)
+runs **weekly** (Mondays 05:00 UTC) and **on demand**. It provisions a
+disposable Postgres, restores the newest backup through
+[`scripts/restore-drill.sh`](../scripts/restore-drill.sh), then verifies:
+
+- core-table row counts (`Payment`, `Batch`, `Recurrence`, `ScheduledPayment`,
+  `PaymentRequest`, `Webhook`, `WebhookDelivery`, `Refund`, `User`) — a missing
+  or unqueryable table fails the drill;
+- `prisma migrate status` against the restored database (a missing migrations
+  table or a failed migration fails the drill).
+
+Run it manually, or prove that a bad backup fails the drill:
+
+```bash
+# Restore the newest backup
+gh workflow run db-restore-drill.yml --repo OphirPay/OphirPay
+
+# Deliberately point it at a corrupt/missing object — the run MUST fail
+gh workflow run db-restore-drill.yml --repo OphirPay/OphirPay \
+  -f backup_key=does-not-exist.sql.gz
+```
+
+Run the same drill locally with AWS credentials and `Docker` available:
+
+```bash
+AWS_REGION=... ./scripts/restore-drill.sh
+```
+
+### Freshness & retention
+
+The `db-backup.yml` workflow additionally asserts **freshness** (the newest
+backup must be younger than 26 h) on an independent schedule and opens a
+tracking issue when a backup fails. The retention policy (daily copies kept 30
+days, Sunday copies 90 days) is documented in
+[`docs/DISASTER_RECOVERY.md`](DISASTER_RECOVERY.md#11-backup-monitoring--retention).
 
 ---
 
