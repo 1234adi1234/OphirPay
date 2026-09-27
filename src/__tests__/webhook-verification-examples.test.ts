@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { buildSignedPayload } from "@/lib/webhook-deliver";
 
@@ -280,6 +281,25 @@ describe("webhook verification examples — docs consistency", () => {
 });
 
 describe("webhook verification examples — Go (verify.go)", () => {
+  // `go run .` compiles the verifier on its first invocation, which blows past
+  // the default 5s test timeout on a cold CI runner. Warm the build cache once
+  // with an explicit budget so the tests below measure verification, not
+  // compilation (the first Go test was failing CI at 5s while compiling).
+  beforeAll(() => {
+    if (!hasGo) return;
+    const warm = spawnSync(
+      "go",
+      ["build", "-o", path.join(os.tmpdir(), "ophirpay-go-verify-warm")],
+      {
+        cwd: GO_DIR,
+        encoding: "utf8",
+        timeout: 60_000,
+        env: { ...process.env, GOFLAGS: "-mod=mod" },
+      }
+    );
+    expect(warm.status).toBe(0);
+  }, 60_000);
+
   it.skipIf(!hasGo)("verifies a payload produced by buildSignedPayload", () => {
     const { body, signature } = buildSignedPayload(
       { ...samplePayload, timestamp: new Date().toISOString() },
