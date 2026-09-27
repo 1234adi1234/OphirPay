@@ -20,6 +20,7 @@
   - [x] Stale test expectations aligned with the 300-code catalog — full suite green
   - [x] OpenAPI spec expanded to cover all 40 API routes
   - [x] Docs numbers (tests, versions, gas) aligned with reality
+  - [x] WebSocket live-event server & dual-transport fallback documented ([docs/WEBSOCKET.md](docs/WEBSOCKET.md) — #768)
 
 ### Submission Milestone (Q3 2026)
 
@@ -45,7 +46,7 @@ fully-green repository.
 - [ ] Mobile wallet SDK (React Native)
 - [ ] Fiat on-ramp integration (Kado, MoonPay)
 - [ ] Cross-chain bridge support (Sep-38 anchors)
-- [ ] Real-time WebSocket API (replace SSE polling)
+- [ ] Real-time WebSocket API enhancements (server-side RFC 6455 server exists on port 8787 with SSE fallback — see [docs/WEBSOCKET.md](docs/WEBSOCKET.md); remaining: replace internal contract polling with push-based Soroban RPC subscriptions, client channel filtering, and Redis pub/sub clustering)
 - [ ] Automated market maker for fee distribution
 
 ## Q1 2027
