@@ -245,7 +245,11 @@ function buildMetrics(): string {
     "",
     "# HELP ophirpay_sse_open_connections Currently open SSE event-stream connections",
     "# TYPE ophirpay_sse_open_connections gauge",
-    `ophirpay_sse_open_connections ${c.sse_open_connections}`
+    `ophirpay_sse_open_connections ${c.sse_open_connections}`,
+    "",
+    "# HELP ophirpay_sse_dropped_events_total SSE events shed by the bounded slow-consumer buffer",
+    "# TYPE ophirpay_sse_dropped_events_total counter",
+    `ophirpay_sse_dropped_events_total ${c.sse_dropped_events_total}`
   );
 
   return lines.join("\n") + "\n";

@@ -606,6 +606,38 @@ event: payment.completed
 data: {"id":"pay_98234ab1c09d","amount":"250.00","asset":"USDC","status":"COMPLETED","transactionHash":"9b12a84efc713b194d3f5481d9f8e4c3a2105e6b7d8c9a0f1e2d3c4b5a6f7e8d"}
 ```
 
+### Page Through Event History (cursor pagination)
+
+The event-history reader uses the same opaque keyset cursor as the payments
+list (issue #746). Pass `limit` (1–100, default 50) and the `nextCursor` from
+the previous response to walk back through on-chain events without re-reading
+or skipping records.
+
+```bash
+# First page
+curl -X GET "https://api.ophirpay.com/api/events/history?limit=50"
+
+# Next page — reuse meta.nextCursor
+curl -X GET "https://api.ophirpay.com/api/events/history?limit=50&cursor=<meta.nextCursor>"
+```
+
+**Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "data": {
+    "events": [
+      { "id": "evt_42", "type": "payment.created", "payer": "G...", "payee": "G...", "amount": 125000000, "txHash": "cafebabe", "timestamp": 1724000000 }
+    ],
+    "total": 842
+  },
+  "meta": { "limit": 50, "nextCursor": "eyJjcmVhdGVkQXQiOi...", "hasMore": true, "timestamp": "2026-08-29T09:00:00.000Z" }
+}
+```
+
+Events are ordered newest-first by on-chain id (`id DESC`). `meta.nextCursor`
+is `null` on the last page; an invalid cursor returns `400`.
+
 ---
 
 ## 12. System Health & Metrics

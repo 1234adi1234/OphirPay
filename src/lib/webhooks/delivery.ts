@@ -10,6 +10,11 @@
 
 import { logger } from "@/lib/logger";
 import { incMetric } from "@/lib/metrics-counters";
+import {
+  fetchWithTimeout,
+  getWebhookTimeoutMs,
+  isTimeoutError,
+} from "@/lib/timeout";
 import { isSafeWebhookUrlAtDelivery } from "./url-safety";
 import { buildWebhookRequestPreview } from "./signing";
 import type { WebhookDeliveryDetails, WebhookPayload } from "./types";
@@ -63,16 +68,19 @@ export async function deliverWebhook(
     }
 
     attempts = attempt;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
     try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: request.headers,
-        body: request.body,
-        signal: controller.signal,
-        redirect: "manual",
-      });
+      // Explicit, configurable timeout + AbortSignal (issue #747): a hung
+      // endpoint aborts here instead of blocking the request budget.
+      const response = await fetchWithTimeout(
+        url,
+        {
+          method: "POST",
+          headers: request.headers,
+          body: request.body,
+          redirect: "manual",
+        },
+        { timeoutMs: getWebhookTimeoutMs(), label: "Webhook delivery" }
+      );
       const responseBody = typeof response.text === "function" ? await response.text() : "";
       lastResponseBody = responseBody;
       lastStatusCode = response.status;
@@ -99,10 +107,12 @@ export async function deliverWebhook(
       lastError = `HTTP ${response.status}`;
       logger.warn("Webhook delivery failed", { url, status: response.status, attempt });
     } catch (err) {
-      lastError = err instanceof Error ? err.message : String(err);
+      lastError = isTimeoutError(err)
+        ? `Webhook delivery timed out after ${getWebhookTimeoutMs()}ms`
+        : err instanceof Error
+          ? err.message
+          : String(err);
       logger.warn("Webhook delivery error", { url, error: lastError, attempt });
-    } finally {
-      clearTimeout(timeout);
     }
 
     if (attempt < maxRetries) {

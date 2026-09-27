@@ -9,8 +9,15 @@ import {
   Asset,
   Memo,
   Keypair,
+  Config,
 } from "@stellar/stellar-sdk";
 import { getStellarErrorMessage } from "./stellar-error";
+import {
+  getHorizonTimeoutMs,
+  getSorobanTimeoutMs,
+  getStellarTimeoutMs,
+  withStellarTimeoutProxy,
+} from "./timeout";
 
 // ── Batch Recipient ───────────────────────────────────────────
 
@@ -51,13 +58,27 @@ export const NETWORK_PASSPHRASE =
 
 // ── Horizon Server ─────────────────────────────────────────────
 
+// ── Outbound timeouts (issue #747) ─────────────────────────────
+//
+// Every Horizon/Soroban call must carry an explicit, configurable timeout so a
+// slow upstream surfaces as a classified error instead of a hung request.
+// `Config.setTimeout` sets the SDK-wide default (federation/stellartoml and
+// the SDK's own HTTP client), while the proxies below enforce the budget on
+// each Horizon/Soroban method call.
+Config.setTimeout(getStellarTimeoutMs());
+
 let _horizonServer: Horizon.Server | null = null;
 
 export function getHorizonServer(): Horizon.Server {
   if (!_horizonServer) {
     _horizonServer = new Horizon.Server(HORIZON_URL);
   }
-  return _horizonServer;
+  // Timeout-enforcing view: every method (and fluent call builder) is wrapped.
+  return withStellarTimeoutProxy(
+    _horizonServer,
+    getHorizonTimeoutMs(),
+    "Horizon"
+  );
 }
 
 // ── Soroban RPC Server (lazy initialized) ──────────────────────
@@ -68,9 +89,16 @@ export function getSorobanServer(): rpc.Server {
   if (!_sorobanServer) {
     _sorobanServer = new rpc.Server(SOROBAN_RPC_URL, {
       allowHttp: false,
+      // The SDK aborts the underlying request once this budget elapses…
+      timeout: getSorobanTimeoutMs(),
     });
   }
-  return _sorobanServer;
+  // …and the proxy turns the expiry into a classified `TimeoutError`.
+  return withStellarTimeoutProxy(
+    _sorobanServer,
+    getSorobanTimeoutMs(),
+    "Soroban RPC"
+  );
 }
 
 // ── Balance Fetching ───────────────────────────────────────────
