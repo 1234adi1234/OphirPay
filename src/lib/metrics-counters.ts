@@ -26,6 +26,10 @@ const counters = {
    * `sse_open_connections` means clients are being out-paced by the stream.
    */
   sse_dropped_events_total: 0,
+  /** Counter: cumulative RPC failover transitions (issue #820). */
+  rpc_failover_total: 0,
+  /** Counter: cumulative RPC recoveries to the primary endpoint (issue #820). */
+  rpc_failover_recoveries_total: 0,
 };
 
 /** Last failover snapshot read by a scrape, for diffing gauge/counter gauges. */
