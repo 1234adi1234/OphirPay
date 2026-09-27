@@ -40,6 +40,7 @@ import {
   type PaymentSortKey,
 } from "@/lib/payments-sort";
 import { useTableKeyboardNavigation } from "@/hooks/useTableKeyboardNavigation";
+import { useVirtualRows } from "@/hooks/useVirtualRows";
 
 // ── Sortable column header ─────────────────────────────────────
 
@@ -108,8 +109,11 @@ interface OnChainData {
   total: number;
 }
 
-const ALLOWED_PAGE_SIZES = [10, 25, 50] as const;
+const ALLOWED_PAGE_SIZES = [10, 25, 50, 100, 250] as const;
 const DEFAULT_PAGE_SIZE = 25;
+
+/** Max height of the virtualized scroll viewport (issue #745). */
+const VIRTUAL_TABLE_MAX_HEIGHT = 600;
 
 // Fetch the complete on-chain dataset rather than a recent slice. Sorting and
 // pagination run client-side, so operating on a partial slice would silently
@@ -258,10 +262,26 @@ function PaymentsClient() {
   const startIndex = (currentPage - 1) * pageSize;
   const paginated = sorted.slice(startIndex, startIndex + pageSize);
 
+  // Row virtualization (issue #745): only the rows in the viewport (plus
+  // overscan) are mounted, so a large page keeps the DOM bounded while the
+  // scrollbar still reflects every row. Small pages render in full.
+  const {
+    startIndex: windowStart,
+    endIndex: windowEnd,
+    topSpacerHeight,
+    bottomSpacerHeight,
+    virtualized,
+    containerRef,
+    onScroll,
+  } = useVirtualRows(paginated.length);
+  const visibleRows = virtualized
+    ? paginated.slice(windowStart, windowEnd)
+    : paginated;
+
   // Roving-tabindex keyboard navigation: the active row is in the tab order
   // and ArrowUp/Down/Home/End move between rows (also from row actions).
   const { activeIndex, getRowProps, onRowsKeyDown, tbodyRef } =
-    useTableKeyboardNavigation(paginated.length);
+    useTableKeyboardNavigation(visibleRows.length);
 
   const updateQuery = (updates: Record<string, string | null>) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -280,6 +300,17 @@ function PaymentsClient() {
       pageSize: size === DEFAULT_PAGE_SIZE ? null : String(size),
       page: null,
     });
+
+  // Explicit "load more" affordance: grow the page size to the next rung so
+  // more rows are loaded while virtualization keeps the mounted DOM bounded.
+  const nextPageSize = ALLOWED_PAGE_SIZES.find((size) => size > pageSize);
+  const canLoadMore = nextPageSize !== undefined && filtered.length > pageSize;
+  const loadMore = () => {
+    if (nextPageSize === undefined) return;
+    updateQuery({
+      pageSize: nextPageSize === DEFAULT_PAGE_SIZE ? null : String(nextPageSize),
+    });
+  };
 
   const { currency, setCurrency } = useCurrencyDisplay();
   const { price: xlmPrice, isUnavailable: isPriceUnavailable } = useXlmPrice();
@@ -515,8 +546,20 @@ function PaymentsClient() {
         />
       ) : (
       <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm" aria-busy={loading}>
+        <div
+          ref={containerRef}
+          onScroll={onScroll}
+          className="overflow-x-auto overflow-y-auto"
+          style={virtualized ? { maxHeight: VIRTUAL_TABLE_MAX_HEIGHT } : undefined}
+        >
+          {virtualized && topSpacerHeight > 0 && (
+            <div style={{ height: topSpacerHeight }} aria-hidden="true" />
+          )}
+          <table
+            className="w-full text-sm"
+            aria-busy={loading}
+            aria-rowcount={filtered.length + 1}
+          >
             <thead>
               <tr className="text-left text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-900/50">
                 <th scope="col" className="py-3 px-4 font-medium">Payment</th>
@@ -566,11 +609,12 @@ function PaymentsClient() {
               )}
 
               {!loading &&
-                paginated.map((payment, index) => (
+                visibleRows.map((payment, index) => (
                   <tr
                     key={payment.id}
                     data-row-index={index}
                     {...getRowProps(index)}
+                    aria-rowindex={startIndex + windowStart + index + 2}
                     className={cn(
                       "border-b border-gray-100 dark:border-gray-800/50 transition-colors",
                       index === activeIndex
@@ -646,6 +690,9 @@ function PaymentsClient() {
                 ))}
             </tbody>
           </table>
+          {virtualized && bottomSpacerHeight > 0 && (
+            <div style={{ height: bottomSpacerHeight }} aria-hidden="true" />
+          )}
         </div>
 
         {!loading && !error && filtered.length > 0 && (
@@ -670,6 +717,15 @@ function PaymentsClient() {
                   </option>
                 ))}
               </select>
+              {canLoadMore && (
+                <button
+                  type="button"
+                  onClick={loadMore}
+                  className="rounded-lg border border-gray-200 dark:border-gray-700 px-3 py-1 text-sm font-medium text-ophir-600 dark:text-ophir-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+                >
+                  Load more
+                </button>
+              )}
             </div>
             <Pagination
               page={currentPage}

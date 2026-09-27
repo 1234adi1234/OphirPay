@@ -5,8 +5,10 @@ import { NextResponse } from "next/server";
 import {
   getMetricsSnapshot,
   getEndpointMetrics,
+  recordRpcFailoverState,
   LATENCY_BUCKET_BOUNDS,
 } from "@/lib/metrics-counters";
+import { getRpcFailoverState } from "@/lib/rpc-failover";
 import { timingSafeEqual } from "@/lib/crypto";
 import { authenticateRequest } from "@/lib/api-auth";
 import { hasScope, ADMIN_SCOPE } from "@/lib/api-scopes";
@@ -183,6 +185,46 @@ function buildMetrics(): string {
     'ophirpay_info{version="1.0.0"} 1'
   );
 
+  // ── Soroban RPC failover (issue #820) ───────────────────────
+  // Which endpoint is serving, whether we are on a fallback, how many
+  // failovers have occurred and how long the current fallback has lasted.
+  // Sampled on scrape so the gauges track the live failover module state.
+  const failover = getRpcFailoverState();
+  recordRpcFailoverState({
+    failoverCount: failover.failoverCount,
+    recoveryCount: failover.recoveryCount,
+    activeEndpoint: failover.activeEndpoint,
+    primaryEndpoint: failover.primaryEndpoint,
+    usingFallback: failover.usingFallback,
+    currentFallbackDurationMs: failover.currentFallbackDurationMs,
+    longestFallbackDurationMs: failover.longestFallbackDurationMs,
+  });
+  const endpointLabel = failover.activeEndpoint
+    ? `endpoint="${escapeLabelValue(failover.activeEndpoint)}"`
+    : "";
+  lines.push(
+    "",
+    "# HELP ophirpay_rpc_failover_total Cumulative transitions away from the primary Soroban RPC endpoint",
+    "# TYPE ophirpay_rpc_failover_total counter",
+    `ophirpay_rpc_failover_total ${failover.failoverCount}`,
+    "",
+    "# HELP ophirpay_rpc_failover_recoveries_total Cumulative transitions back to the primary Soroban RPC endpoint",
+    "# TYPE ophirpay_rpc_failover_recoveries_total counter",
+    `ophirpay_rpc_failover_recoveries_total ${failover.recoveryCount}`,
+    "",
+    "# HELP ophirpay_rpc_failover_active 1 while serving from a non-primary Soroban RPC endpoint",
+    "# TYPE ophirpay_rpc_failover_active gauge",
+    `ophirpay_rpc_failover_active${endpointLabel ? `{${endpointLabel}}` : ""} ${failover.usingFallback ? 1 : 0}`,
+    "",
+    "# HELP ophirpay_rpc_failover_fallback_duration_seconds Seconds spent on the current fallback endpoint (0 when primary)",
+    "# TYPE ophirpay_rpc_failover_fallback_duration_seconds gauge",
+    `ophirpay_rpc_failover_fallback_duration_seconds ${(failover.currentFallbackDurationMs / 1000).toFixed(3)}`,
+    "",
+    "# HELP ophirpay_rpc_failover_longest_fallback_duration_seconds Longest fallback episode observed since process start",
+    "# TYPE ophirpay_rpc_failover_longest_fallback_duration_seconds gauge",
+    `ophirpay_rpc_failover_longest_fallback_duration_seconds ${(failover.longestFallbackDurationMs / 1000).toFixed(3)}`
+  );
+
   // ── Live gauges: process memory + open SSE connections ──────
   // Sampled on scrape so load tests can assert memory stays bounded and
   // that SSE connections are released after clients disconnect.
@@ -203,7 +245,11 @@ function buildMetrics(): string {
     "",
     "# HELP ophirpay_sse_open_connections Currently open SSE event-stream connections",
     "# TYPE ophirpay_sse_open_connections gauge",
-    `ophirpay_sse_open_connections ${c.sse_open_connections}`
+    `ophirpay_sse_open_connections ${c.sse_open_connections}`,
+    "",
+    "# HELP ophirpay_sse_dropped_events_total SSE events shed by the bounded slow-consumer buffer",
+    "# TYPE ophirpay_sse_dropped_events_total counter",
+    `ophirpay_sse_dropped_events_total ${c.sse_dropped_events_total}`
   );
 
   return lines.join("\n") + "\n";

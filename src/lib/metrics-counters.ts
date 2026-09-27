@@ -20,7 +20,40 @@ const counters = {
   db_query_duration_seconds_count: 0,
   /** Gauge: currently open SSE event-stream connections (inc on connect, dec on disconnect). */
   sse_open_connections: 0,
+  /**
+   * Counter: SSE events shed because a slow/stalled consumer exhausted its
+   * bounded outbound buffer (issue #744). A rising value with a flat
+   * `sse_open_connections` means clients are being out-paced by the stream.
+   */
+  sse_dropped_events_total: 0,
+  /** Counter: cumulative RPC failover transitions (issue #820). */
+  rpc_failover_total: 0,
+  /** Counter: cumulative RPC recoveries to the primary endpoint (issue #820). */
+  rpc_failover_recoveries_total: 0,
 };
+
+/** Last failover snapshot read by a scrape, for diffing gauge/counter gauges. */
+let lastRpcFailover: {
+  failoverCount: number;
+  recoveryCount: number;
+  activeEndpoint: string | null;
+  primaryEndpoint: string | null;
+  usingFallback: boolean;
+  currentFallbackDurationMs: number;
+  longestFallbackDurationMs: number;
+} | null = null;
+
+/** Store the latest RPC failover state so the metrics exposition stays consistent. */
+export function recordRpcFailoverState(state: NonNullable<typeof lastRpcFailover>): void {
+  lastRpcFailover = state;
+  counters.rpc_failover_total = state.failoverCount;
+  counters.rpc_failover_recoveries_total = state.recoveryCount;
+}
+
+/** Read the last recorded RPC failover state (null before the first record). */
+export function getRpcFailoverSnapshot(): typeof lastRpcFailover {
+  return lastRpcFailover;
+}
 
 export type MetricName = keyof typeof counters;
 export type DeliveryType = "webhook" | "batch";
@@ -129,6 +162,7 @@ export function resetMetricsForTest(): void {
   }
   deliveryAttempts.clear();
   deliveryFinalOutcomes.clear();
+  lastRpcFailover = null;
 }
 
 // ── Per-endpoint latency histograms and error counts ──────────
