@@ -1,7 +1,6 @@
 "use client";
 // SPDX-License-Identifier: MIT
 
-
 import { useState, useEffect, useCallback } from "react";
 import { TransactionBuilder } from "@stellar/stellar-sdk";
 import { cn } from "@/lib/utils";
@@ -10,6 +9,9 @@ import {
   USDC_TESTNET,
   USDC_MAINNET,
   type AssetInfo,
+  resolveAssetMetadata,
+  truncateIssuer,
+  isValidAssetIssuer,
 } from "@/lib/assets";
 import { fetchAllBalances, getHorizonServer, NETWORK_PASSPHRASE, STELLAR_NETWORK, type AssetBalance } from "@/lib/stellar";
 import { buildTrustlineTransaction, checkTrustline, getTrustlineMessage, type TrustlineState } from "@/lib/trustline";
@@ -54,6 +56,13 @@ export function AssetSelector({
   disabled = false,
 }: AssetSelectorProps) {
   const [balances, setBalances] = useState<AssetBalance[]>([]);
+  const [customAssets, setCustomAssets] = useState<AssetInfo[]>([]);
+  const [showCustomInput, setShowCustomInput] = useState(false);
+  const [customCode, setCustomCode] = useState("");
+  const [customIssuer, setCustomIssuer] = useState("");
+  const [resolvingCustom, setResolvingCustom] = useState(false);
+  const [resolveError, setResolveError] = useState<string | null>(null);
+  const [showFullIssuer, setShowFullIssuer] = useState(false);
   const [trustlineStatus, setTrustlineStatus] = useState<
     Record<string, { hasTrustline: boolean; checking: boolean; state?: TrustlineState }>
   >({});
@@ -158,6 +167,60 @@ export function AssetSelector({
     }
   };
 
+  const handleAddCustomAsset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const code = customCode.trim().toUpperCase();
+    const issuer = customIssuer.trim();
+    if (!code) return;
+
+    if (issuer && !isValidAssetIssuer(issuer)) {
+      setResolveError("Invalid Stellar issuer public key (must start with G, 56 characters)");
+      return;
+    }
+
+    setResolvingCustom(true);
+    setResolveError(null);
+    try {
+      const meta = await resolveAssetMetadata(code, issuer || undefined);
+      const newAsset: AssetInfo = {
+        code: meta.code,
+        issuer: meta.issuer,
+        type: meta.type,
+        displayName: meta.displayName,
+        decimals: meta.displayDecimals ?? 7,
+        domain: meta.domain,
+        orgName: meta.orgName,
+        desc: meta.desc,
+      };
+      setCustomAssets((prev) => {
+        const exists = prev.some(
+          (a) => a.code === newAsset.code && a.issuer === newAsset.issuer
+        );
+        return exists ? prev : [...prev, newAsset];
+      });
+      await handleSelect(newAsset);
+      setShowCustomInput(false);
+      setCustomCode("");
+      setCustomIssuer("");
+    } catch {
+      const fallback: AssetInfo = {
+        code,
+        issuer: issuer || undefined,
+        type: code === "XLM" && !issuer ? "native" : code.length <= 4 ? "credit_alphanum4" : "credit_alphanum12",
+        displayName: code,
+        decimals: 7,
+      };
+      setCustomAssets((prev) => [...prev, fallback]);
+      await handleSelect(fallback);
+      setShowCustomInput(false);
+      setCustomCode("");
+      setCustomIssuer("");
+    } finally {
+      setResolvingCustom(false);
+    }
+  };
+
+  const allAssets = [...KNOWN_ASSETS, ...customAssets];
   const balance = findAssetBalance(balances, selectedAsset);
 
   return (
@@ -177,8 +240,30 @@ export function AssetSelector({
           <span className="w-6 h-6 rounded-full bg-ophir-100 dark:bg-ophir-900/30 flex items-center justify-center text-xs font-bold text-ophir-700 dark:text-ophir-300">
             {selectedAsset.code.slice(0, 2)}
           </span>
-          <span className="text-gray-900 dark:text-white font-medium">
-            {selectedAsset.code}
+          <span className="text-left flex flex-col">
+            <span className="text-gray-900 dark:text-white font-medium flex items-center gap-1.5">
+              <span>{selectedAsset.code}</span>
+              {selectedAsset.displayName &&
+                selectedAsset.displayName !== selectedAsset.code && (
+                  <span className="text-xs text-gray-500 dark:text-gray-400 font-normal">
+                    ({selectedAsset.displayName})
+                  </span>
+                )}
+            </span>
+            {selectedAsset.issuer && (
+              <span
+                className="text-[10px] text-gray-400 font-mono hover:underline cursor-pointer"
+                title={selectedAsset.issuer}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowFullIssuer((prev) => !prev);
+                }}
+              >
+                {showFullIssuer
+                  ? selectedAsset.issuer
+                  : truncateIssuer(selectedAsset.issuer)}
+              </span>
+            )}
           </span>
         </span>
 
@@ -209,10 +294,10 @@ export function AssetSelector({
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute z-20 top-full left-0 right-0 mt-1 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-xl py-1 animate-fade-in">
-            {KNOWN_ASSETS.map((asset) => {
+          <div className="absolute z-20 top-full left-0 right-0 mt-1 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-xl py-1 animate-fade-in max-h-96 overflow-y-auto">
+            {allAssets.map((asset) => {
               const bal = findAssetBalance(balances, asset);
-              const key = `${asset.code}:${asset.issuer}`;
+              const key = `${asset.code}:${asset.issuer ?? "native"}`;
               const tl = trustlineStatus[key];
 
               return (
@@ -232,12 +317,33 @@ export function AssetSelector({
                       {asset.code.slice(0, 2)}
                     </span>
                     <div className="text-left">
-                      <span className="text-gray-900 dark:text-white font-medium">
-                        {asset.code}
-                      </span>
-                      <span className="block text-xs text-gray-400">
-                        {asset.displayName}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-gray-900 dark:text-white font-medium">
+                          {asset.code}
+                        </span>
+                        {asset.displayName && asset.displayName !== asset.code && (
+                          <span className="text-xs text-gray-500 dark:text-gray-400 font-normal">
+                            ({asset.displayName})
+                          </span>
+                        )}
+                        {asset.domain && (
+                          <span className="text-[10px] bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 px-1.5 py-0.5 rounded font-normal">
+                            {asset.domain}
+                          </span>
+                        )}
+                      </div>
+                      {asset.issuer ? (
+                        <span
+                          className="block text-[10px] text-gray-400 font-mono"
+                          title={asset.issuer}
+                        >
+                          Issuer: {truncateIssuer(asset.issuer)}
+                        </span>
+                      ) : (
+                        <span className="block text-xs text-gray-400">
+                          {asset.displayName}
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="text-right">
@@ -301,11 +407,60 @@ export function AssetSelector({
               </div>
             )}
 
-            {/* Custom token input */}
-            <div className="border-t border-gray-100 dark:border-gray-700 mt-1 pt-1 px-3 pb-2">
-              <p className="text-xs text-gray-400 px-1 mb-1">
-                Custom token coming soon
-              </p>
+            {/* Custom token input & resolution */}
+            <div className="border-t border-gray-100 dark:border-gray-700 mt-1 pt-2 px-3 pb-2">
+              {!showCustomInput ? (
+                <button
+                  type="button"
+                  onClick={() => setShowCustomInput(true)}
+                  className="w-full text-xs text-left text-ophir-600 dark:text-ophir-400 hover:underline py-1 cursor-pointer"
+                >
+                  + Add custom asset
+                </button>
+              ) : (
+                <form onSubmit={handleAddCustomAsset} className="space-y-2 mt-1">
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="Code (e.g. AQUA)"
+                      value={customCode}
+                      onChange={(e) => setCustomCode(e.target.value.toUpperCase())}
+                      className="w-1/3 px-2 py-1 text-xs border rounded bg-transparent border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white uppercase"
+                      maxLength={12}
+                      required
+                    />
+                    <input
+                      type="text"
+                      placeholder="Issuer (G... address)"
+                      value={customIssuer}
+                      onChange={(e) => setCustomIssuer(e.target.value.trim())}
+                      className="w-2/3 px-2 py-1 text-xs border rounded bg-transparent border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white font-mono"
+                    />
+                  </div>
+                  {resolveError && (
+                    <p className="text-[11px] text-red-500">{resolveError}</p>
+                  )}
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowCustomInput(false);
+                        setResolveError(null);
+                      }}
+                      className="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 px-2 py-1 cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={resolvingCustom || !customCode.trim()}
+                      className="text-xs px-2.5 py-1 bg-ophir-600 text-white rounded hover:bg-ophir-700 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+                    >
+                      {resolvingCustom ? "Resolving..." : "Select Asset"}
+                    </button>
+                  </div>
+                </form>
+              )}
             </div>
           </div>
         </>

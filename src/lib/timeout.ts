@@ -65,6 +65,7 @@ export const DEFAULT_TIMEOUTS_MS = {
   price: 5_000,
   webhook: 5_000,
   failoverProbe: 3_000,
+  metadata: 5_000,
 } as const;
 
 /** Read a positive integer millisecond budget from the environment. */
@@ -103,6 +104,11 @@ export function getWebhookTimeoutMs(): number {
 /** RPC health-probe budget (`RPC_PROBE_TIMEOUT_MS`). */
 export function getFailoverProbeTimeoutMs(): number {
   return readTimeoutEnv("RPC_PROBE_TIMEOUT_MS", DEFAULT_TIMEOUTS_MS.failoverProbe);
+}
+
+/** Asset metadata (SEP-1 TOML) request budget (`METADATA_REQUEST_TIMEOUT_MS`). */
+export function getMetadataTimeoutMs(): number {
+  return readTimeoutEnv("METADATA_REQUEST_TIMEOUT_MS", DEFAULT_TIMEOUTS_MS.metadata);
 }
 
 // ── Abortable timeout ──────────────────────────────────────────

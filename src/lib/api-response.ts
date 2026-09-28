@@ -183,6 +183,8 @@ export function badRequestError(message: string) {
   return errorResponse(ERROR_CODES.BAD_REQUEST, message, 400);
 }
 
+export const badRequest = badRequestError;
+
 // ── Unified Error Handler ──────────────────────────────────────
 
 /**
