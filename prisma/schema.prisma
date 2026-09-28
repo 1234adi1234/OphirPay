@@ -715,15 +715,27 @@ model ApiKey {
   createdAt DateTime @default(now())
   /// Optional expiry — the key stops working after this time.
   expiresAt DateTime?
+  /// If this key was created via rotation, the ID of the parent key it replaced.
+  rotatedFromId String?
+  /// When this key was rotated (set on the old key undergoing rotation).
+  rotatedAt     DateTime?
+  /// Expiry timestamp before rotation, preserved in case rotation is cancelled.
+  preRotationExpiresAt DateTime?
 
   /// Owner of this key (see User).
   user      User     @relation(fields: [userId], references: [id])
   requestLogs ApiKeyRequestLog[]
+  /// Parent key this key was rotated from (see ApiKey).
+  rotatedFrom   ApiKey?    @relation("ApiKeyRotation", fields: [rotatedFromId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  /// Child keys created by rotating this key.
+  rotations     ApiKey[]   @relation("ApiKeyRotation")
 
   /// Speeds up "all keys for a user".
   @@index([userId])
   /// Speeds up prefix-based identification lookups.
   @@index([prefix])
+  /// Speeds up rotated-from lookups.
+  @@index([rotatedFromId])
 }
 
 /// One recorded request made with an API key — used to aggregate usage by

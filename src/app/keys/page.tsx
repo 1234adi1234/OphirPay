@@ -21,6 +21,16 @@ interface ApiKeyRecord {
   lastUsed: string | null;
   createdAt: string;
   expiresAt: string | null;
+  rotatedAt?: string | null;
+  rotatedFromId?: string | null;
+  rotatedFrom?: { id: string; name: string; prefix: string } | null;
+  rotations?: Array<{
+    id: string;
+    name: string;
+    prefix: string;
+    createdAt: string;
+    expiresAt: string | null;
+  }>;
 }
 
 interface KeyUsage {
@@ -65,6 +75,15 @@ export default function ApiKeysPage() {
   // Edit panel
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editScopes, setEditScopes] = useState<ApiScope[]>([]);
+
+  // Rotate panel & state
+  const [rotatingId, setRotatingId] = useState<string | null>(null);
+  const [overlapHours, setOverlapHours] = useState(24);
+  const [rotating, setRotating] = useState(false);
+  const [rotatedResult, setRotatedResult] = useState<{
+    newKey: { key: string; prefix: string; name: string };
+    overlapExpiresAt: string;
+  } | null>(null);
 
   // Usage-stats window
   const [window, setWindow] = useState("30d");
@@ -154,6 +173,83 @@ export default function ApiKeysPage() {
     } catch (err) {
       toast.error(
         "Update failed",
+        err instanceof Error ? err.message : "Unknown error"
+      );
+    }
+  };
+
+  const handleRotate = async (id: string) => {
+    setRotating(true);
+    try {
+      const res = await fetch("/api/keys/rotate", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, overlapHours }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error?.message ?? "Failed to rotate key");
+      }
+      setRotatedResult({
+        newKey: data.data.newKey,
+        overlapExpiresAt: data.data.overlapExpiresAt,
+      });
+      setRotatingId(null);
+      toast.success(
+        "API key rotated",
+        "New key generated! Both keys authenticate during the overlap window."
+      );
+      loadKeys();
+    } catch (err) {
+      toast.error(
+        "Rotation failed",
+        err instanceof Error ? err.message : "Unknown error"
+      );
+    } finally {
+      setRotating(false);
+    }
+  };
+
+  const handleConfirmCutover = async (id: string) => {
+    try {
+      const res = await fetch("/api/keys/rotate/confirm", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error?.message ?? "Failed to confirm cutover");
+      }
+      toast.success("Cutover confirmed", "The old key has been expired immediately.");
+      loadKeys();
+    } catch (err) {
+      toast.error(
+        "Cutover failed",
+        err instanceof Error ? err.message : "Unknown error"
+      );
+    }
+  };
+
+  const handleCancelRotation = async (id: string) => {
+    try {
+      const res = await fetch("/api/keys/rotate/cancel", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error?.message ?? "Failed to cancel rotation");
+      }
+      toast.success("Rotation cancelled", "Replacement key revoked and original key restored.");
+      loadKeys();
+    } catch (err) {
+      toast.error(
+        "Cancellation failed",
         err instanceof Error ? err.message : "Unknown error"
       );
     }
@@ -299,6 +395,32 @@ export default function ApiKeysPage() {
             </div>
           </div>
         )}
+
+        {rotatedResult && (
+          <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 space-y-2">
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-amber-800 dark:text-amber-300 font-semibold">
+                Key rotated successfully (Zero Downtime)
+              </p>
+              <button
+                onClick={() => setRotatedResult(null)}
+                className="text-xs text-amber-700 dark:text-amber-400 hover:underline"
+              >
+                Dismiss
+              </button>
+            </div>
+            <p className="text-xs text-amber-700 dark:text-amber-400">
+              Copy your replacement key now. Both keys will authenticate simultaneously until the overlap window closes on{" "}
+              <span className="font-semibold">{formatDate(rotatedResult.overlapExpiresAt)}</span>.
+            </p>
+            <div className="flex items-center gap-2 pt-1">
+              <code className="flex-1 break-all text-xs font-mono text-gray-800 dark:text-gray-200 bg-white dark:bg-gray-900 p-2 rounded border border-amber-200 dark:border-amber-800">
+                {rotatedResult.newKey.key}
+              </code>
+              <CopyButton value={rotatedResult.newKey.key} label="Key" />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* List */}
@@ -315,105 +437,237 @@ export default function ApiKeysPage() {
           </p>
         ) : (
           <ul className="space-y-3">
-            {keys.map((key) => (
-              <li
-                key={key.id}
-                className="rounded-lg border border-gray-200 dark:border-gray-800 p-4"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <p className="font-medium text-gray-900 dark:text-white">
-                      {key.name}
-                    </p>
-                    <p className="text-xs font-mono text-gray-500 dark:text-gray-400">
-                      {key.prefix}… · created{" "}
-                      {new Date(key.createdAt).toLocaleDateString()}
-                      {key.lastUsed
-                        ? ` · last used ${new Date(key.lastUsed).toLocaleDateString()}`
-                        : ""}
-                    </p>
-                    <div className="flex flex-wrap gap-1.5 mt-2">
-                      {key.scopes.length === 0 ? (
-                        <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400">
-                          no scopes
-                        </span>
-                      ) : (
-                        key.scopes.map((s) => (
-                          <span
-                            key={s}
-                            className="px-2 py-0.5 rounded-full text-xs font-medium bg-ophir-100 text-ophir-700 dark:bg-ophir-950/50 dark:text-ophir-300"
-                          >
-                            {s}
-                          </span>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex gap-2 shrink-0">
-                    <button
-                      onClick={() => openEdit(key)}
-                      className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 text-xs font-medium hover:bg-gray-50 dark:hover:bg-gray-800"
-                    >
-                      Edit scopes
-                    </button>
-                    <button
-                      onClick={() => handleDelete(key.id)}
-                      className="px-3 py-1.5 rounded-lg border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 text-xs font-medium hover:bg-red-50 dark:hover:bg-red-950/30"
-                    >
-                      Revoke
-                    </button>
-                  </div>
-                </div>
+            {keys.map((key) => {
+              const nowMs = Date.now();
+              const expiresAtMs = key.expiresAt ? new Date(key.expiresAt).getTime() : null;
+              const isRotating = !!key.rotatedAt && expiresAtMs !== null && expiresAtMs > nowMs;
+              const isRotatedExpired = !!key.rotatedAt && expiresAtMs !== null && expiresAtMs <= nowMs;
+              const isStandardExpired = !key.rotatedAt && expiresAtMs !== null && expiresAtMs <= nowMs;
+              const isReplacement = !!key.rotatedFromId;
 
-                {editingId === key.id && (
-                  <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-800 space-y-3">
-                    <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                      Effective scopes for “{key.name}”
-                    </p>
-                    <div className="grid sm:grid-cols-2 gap-2">
-                      {API_SCOPES.map((scope) => {
-                        const checked = editScopes.includes(scope);
-                        return (
-                          <label
-                            key={scope}
-                            className="flex items-start gap-2.5 p-2.5 rounded-lg border border-gray-200 dark:border-gray-700 cursor-pointer"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() =>
-                                toggleScope(scope, editScopes, setEditScopes)
-                              }
-                              className="mt-0.5 h-4 w-4 rounded border-gray-300 text-ophir-600 focus:ring-ophir-500"
-                            />
-                            <span className="text-sm font-mono text-gray-800 dark:text-gray-200">
-                              {scope}
+              return (
+                <li
+                  key={key.id}
+                  className="rounded-lg border border-gray-200 dark:border-gray-800 p-4"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-medium text-gray-900 dark:text-white">
+                          {key.name}
+                        </p>
+                        {isRotating && (
+                          <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-300 dark:border-amber-800 flex items-center gap-1.5">
+                            <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
+                            In rotation · Overlap ends {formatDate(key.expiresAt)}
+                          </span>
+                        )}
+                        {isRotatedExpired && (
+                          <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400 border border-gray-300 dark:border-gray-700">
+                            Rotated & expired
+                          </span>
+                        )}
+                        {isStandardExpired && (
+                          <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 dark:bg-red-950/50 dark:text-red-300">
+                            Expired
+                          </span>
+                        )}
+                        {isReplacement && (
+                          <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-cyan-100 text-cyan-800 dark:bg-cyan-950/50 dark:text-cyan-300">
+                            Rotated from {key.rotatedFrom?.prefix ?? "parent"}...
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs font-mono text-gray-500 dark:text-gray-400 mt-0.5">
+                        {key.prefix}… · created{" "}
+                        {new Date(key.createdAt).toLocaleDateString()}
+                        {key.lastUsed
+                          ? ` · last used ${new Date(key.lastUsed).toLocaleDateString()}`
+                          : ""}
+                      </p>
+                      {isRotating && key.rotations && key.rotations.length > 0 && (
+                        <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
+                          ↳ Replacement key: <span className="font-mono">{key.rotations[0]?.prefix}...</span> ({key.rotations[0]?.name})
+                        </p>
+                      )}
+                      <div className="flex flex-wrap gap-1.5 mt-2">
+                        {key.scopes.length === 0 ? (
+                          <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+                            no scopes
+                          </span>
+                        ) : (
+                          key.scopes.map((s) => (
+                            <span
+                              key={s}
+                              className="px-2 py-0.5 rounded-full text-xs font-medium bg-ophir-100 text-ophir-700 dark:bg-ophir-950/50 dark:text-ophir-300"
+                            >
+                              {s}
                             </span>
-                          </label>
-                        );
-                      })}
+                          ))
+                        )}
+                      </div>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2 shrink-0">
+                      {isRotating ? (
+                        <>
+                          <button
+                            onClick={() => handleConfirmCutover(key.id)}
+                            className="px-3 py-1.5 rounded-lg border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs font-medium hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition-colors"
+                            title="Expire old key immediately once replacement is deployed"
+                          >
+                            Confirm cutover
+                          </button>
+                          <button
+                            onClick={() => handleCancelRotation(key.id)}
+                            className="px-3 py-1.5 rounded-lg border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-300 text-xs font-medium hover:bg-amber-50 dark:hover:bg-amber-950/30 transition-colors"
+                            title="Cancel rotation, delete replacement key and keep this key active"
+                          >
+                            Cancel rotation
+                          </button>
+                        </>
+                      ) : (
+                        !isRotatedExpired && !isStandardExpired && (
+                          <button
+                            onClick={() => {
+                              setRotatingId(key.id);
+                              setEditingId(null);
+                            }}
+                            className="px-3 py-1.5 rounded-lg border border-ophir-300 dark:border-ophir-700 text-ophir-700 dark:text-ophir-300 text-xs font-medium hover:bg-ophir-50 dark:hover:bg-ophir-950/30 transition-colors"
+                          >
+                            Rotate
+                          </button>
+                        )
+                      )}
                       <button
-                        onClick={() => handleSaveScopes(key.id)}
-                        className="px-4 py-2 rounded-lg bg-ophir-600 text-white text-xs font-medium hover:bg-ophir-700"
+                        onClick={() => openEdit(key)}
+                        className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 text-xs font-medium hover:bg-gray-50 dark:hover:bg-gray-800"
                       >
-                        Save scopes
+                        Edit scopes
                       </button>
                       <button
-                        onClick={() => setEditingId(null)}
-                        className="px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 text-xs font-medium"
+                        onClick={() => handleDelete(key.id)}
+                        className="px-3 py-1.5 rounded-lg border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 text-xs font-medium hover:bg-red-50 dark:hover:bg-red-950/30"
                       >
-                        Cancel
+                        Revoke
                       </button>
                     </div>
                   </div>
-                )}
-              </li>
-            ))}
+
+                  {/* Inline Rotation Panel */}
+                  {rotatingId === key.id && (
+                    <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-800 space-y-3 bg-gray-50 dark:bg-gray-800/40 p-4 rounded-lg">
+                      <div>
+                        <h4 className="text-sm font-semibold text-gray-900 dark:text-white">
+                          Rotate “{key.name}” (Zero-Downtime Secret Rotation)
+                        </h4>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                          Issues a new replacement key with the exact same scopes. Both keys will authenticate simultaneously
+                          during the configured overlap window so your live integrations experience zero downtime.
+                        </p>
+                      </div>
+
+                      <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
+                        <label className="text-xs font-medium text-gray-700 dark:text-gray-300">
+                          Overlap window:
+                        </label>
+                        <select
+                          value={overlapHours}
+                          onChange={(e) => setOverlapHours(Number(e.target.value))}
+                          className="text-xs rounded-lg border border-gray-200 bg-white px-3 py-2 dark:border-gray-700 dark:bg-gray-900 text-gray-900 dark:text-white"
+                        >
+                          <option value={1}>1 hour</option>
+                          <option value={12}>12 hours</option>
+                          <option value={24}>24 hours (default)</option>
+                          <option value={48}>48 hours</option>
+                          <option value={168}>7 days</option>
+                        </select>
+                      </div>
+
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleRotate(key.id)}
+                          disabled={rotating}
+                          className="px-4 py-2 rounded-lg bg-ophir-600 text-white text-xs font-medium hover:bg-ophir-700 disabled:opacity-50 transition-colors"
+                        >
+                          {rotating ? "Generating key..." : "Confirm & Generate Replacement Key"}
+                        </button>
+                        <button
+                          onClick={() => setRotatingId(null)}
+                          className="px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 text-xs font-medium hover:bg-gray-100 dark:hover:bg-gray-800"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Inline Scope Edit Panel */}
+                  {editingId === key.id && (
+                    <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-800 space-y-3">
+                      <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                        Effective scopes for “{key.name}”
+                      </p>
+                      <div className="grid sm:grid-cols-2 gap-2">
+                        {API_SCOPES.map((scope) => {
+                          const checked = editScopes.includes(scope);
+                          return (
+                            <label
+                              key={scope}
+                              className="flex items-start gap-2.5 p-2.5 rounded-lg border border-gray-200 dark:border-gray-700 cursor-pointer"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() =>
+                                  toggleScope(scope, editScopes, setEditScopes)
+                                }
+                                className="mt-0.5 h-4 w-4 rounded border-gray-300 text-ophir-600 focus:ring-ophir-500"
+                              />
+                              <span className="text-sm font-mono text-gray-800 dark:text-gray-200">
+                                {scope}
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleSaveScopes(key.id)}
+                          className="px-4 py-2 rounded-lg bg-ophir-600 text-white text-xs font-medium hover:bg-ophir-700"
+                        >
+                          Save scopes
+                        </button>
+                        <button
+                          onClick={() => setEditingId(null)}
+                          className="px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 text-xs font-medium"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>
+
+      {/* Rotation & Audit Trail Info Card */}
+      <Card>
+        <div className="space-y-3">
+          <h3 className="text-base font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+            <span>🛡️</span> Zero-Downtime Secret Rotation & Audit Trail
+          </h3>
+          <p className="text-xs text-gray-600 dark:text-gray-300 leading-relaxed">
+            API key rotation issues a replacement key with identical scopes and establishes a configurable overlap window
+            (default 24h). During the overlap window, both keys authenticate seamlessly. Once the window closes, the old
+            key is automatically rejected with an explicit rotation reason. You can also explicitly confirm cutover once
+            your new key is deployed, or cancel the rotation at any time during the overlap. Every rotation, cutover, and
+            revocation is permanently recorded in the system audit trail.
+          </p>
+        </div>
+      </Card>
     </div>
   );
 }

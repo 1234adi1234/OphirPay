@@ -173,20 +173,56 @@ export interface AuthResult {
 }
 
 /**
- * Authenticate a request against stored API keys.
- *
- * Uses an indexed lookup on (keyHash, prefix) so the query hits an index
- * rather than scanning every row — safe at any key volume.
+ * API key rotation and detailed authentication constants and helpers.
  */
-export async function authenticateRequest(
+export const DEFAULT_ROTATION_OVERLAP_HOURS = 24;
+export const DEFAULT_ROTATION_OVERLAP_MS =
+  DEFAULT_ROTATION_OVERLAP_HOURS * 60 * 60 * 1000;
+
+export type ApiKeyRejectionReason =
+  | "missing_key"
+  | "malformed_key"
+  | "key_not_found"
+  | "key_expired"
+  | "key_rotated_expired"
+  | "db_error";
+
+export interface AuthenticateRequestResult {
+  authenticated: boolean;
+  auth?: AuthResult;
+  reason?: ApiKeyRejectionReason;
+  message?: string;
+  keyId?: string;
+}
+
+/**
+ * Detailed authentication check returning status and explicit rejection reason.
+ * Useful for determining whether a key was rejected due to expiry after rotation,
+ * regular expiry, format errors, or missing key material.
+ */
+export async function authenticateRequestDetailed(
   request: Request
-): Promise<AuthResult | null> {
+): Promise<AuthenticateRequestResult> {
   const rawKey = extractApiKey(request);
-  if (!rawKey) return null;
+  if (!rawKey) {
+    return {
+      authenticated: false,
+      reason: "missing_key",
+      message:
+        "Valid API key required. Use Authorization: Bearer <key> or X-API-Key header.",
+    };
+  }
+
   // Reject obviously malformed material before hitting the database. Accepts
   // both the current 32-byte format and the legacy 24-byte format so keys
   // issued before #701 still authenticate.
-  if (!API_KEY_LOOKUP_PATTERN.test(rawKey)) return null;
+  if (!API_KEY_LOOKUP_PATTERN.test(rawKey)) {
+    return {
+      authenticated: false,
+      reason: "malformed_key",
+      message: "Malformed API key format.",
+    };
+  }
 
   const prefix = deriveKeyPrefix(rawKey);
   const keyHashes = apiKeyLookupHashes(rawKey);
@@ -203,10 +239,46 @@ export async function authenticateRequest(
       },
     });
 
-    if (!apiKey) return null;
+    if (!apiKey) {
+      return {
+        authenticated: false,
+        reason: "key_not_found",
+        message: "API key not found.",
+      };
+    }
 
     // Check expiration
-    if (apiKey.expiresAt && apiKey.expiresAt < new Date()) return null;
+    if (apiKey.expiresAt && apiKey.expiresAt < new Date()) {
+      let rotatedAt: Date | null =
+        (apiKey as unknown as { rotatedAt?: Date | null }).rotatedAt ?? null;
+      if (!rotatedAt && typeof prisma.apiKey.findUnique === "function") {
+        try {
+          const extra = await prisma.apiKey.findUnique({
+            where: { id: apiKey.id },
+            select: { rotatedAt: true },
+          });
+          rotatedAt = extra?.rotatedAt ?? null;
+        } catch {
+          // ignore DB error in extra lookup
+        }
+      }
+
+      if (rotatedAt) {
+        return {
+          authenticated: false,
+          reason: "key_rotated_expired",
+          message:
+            "API key has expired following rotation. Please use the replacement key.",
+          keyId: apiKey.id,
+        };
+      }
+      return {
+        authenticated: false,
+        reason: "key_expired",
+        message: "API key has expired.",
+        keyId: apiKey.id,
+      };
+    }
 
     // Update lastUsed — fire-and-forget so auth latency is not gated on this write
     prisma.apiKey
@@ -217,15 +289,35 @@ export async function authenticateRequest(
       .catch(() => {});
 
     return {
-      userId: apiKey.userId,
-      keyId: apiKey.id,
-      keyName: apiKey.name,
-      scopes: apiKey.scopes ?? [],
+      authenticated: true,
+      auth: {
+        userId: apiKey.userId,
+        keyId: apiKey.id,
+        keyName: apiKey.name,
+        scopes: apiKey.scopes ?? [],
+      },
     };
   } catch {
     // DB unavailable — reject rather than fail open
-    return null;
+    return {
+      authenticated: false,
+      reason: "db_error",
+      message: "Database error during API key authentication.",
+    };
   }
+}
+
+/**
+ * Authenticate a request against stored API keys.
+ *
+ * Uses an indexed lookup on (keyHash, prefix) so the query hits an index
+ * rather than scanning every row — safe at any key volume.
+ */
+export async function authenticateRequest(
+  request: Request
+): Promise<AuthResult | null> {
+  const result = await authenticateRequestDetailed(request);
+  return result.authenticated && result.auth ? result.auth : null;
 }
 
 // ── Route Helpers ──────────────────────────────────────────────
@@ -248,8 +340,17 @@ export function withApiAuth(
       return handler(request, ...args);
     }
 
-    const auth = await authenticateRequest(request);
-    if (!auth) {
+    const detailed = await authenticateRequestDetailed(request);
+    if (!detailed.authenticated || !detailed.auth) {
+      if (detailed.reason === "key_rotated_expired") {
+        return unauthorizedError(
+          detailed.message ??
+            "API key has expired following rotation. Please use the replacement key."
+        );
+      }
+      if (detailed.reason === "key_expired") {
+        return unauthorizedError(detailed.message ?? "API key has expired.");
+      }
       return unauthorizedError(
         "Valid API key required. Use Authorization: Bearer <key> or X-API-Key header."
       );
@@ -272,13 +373,23 @@ export async function requireScopes(
   request: Request,
   required: ApiScope | ApiScope[]
 ): Promise<AuthResult | NextResponse> {
-  const auth = await authenticateRequest(request);
-  if (!auth) {
+  const detailed = await authenticateRequestDetailed(request);
+  if (!detailed.authenticated || !detailed.auth) {
+    if (detailed.reason === "key_rotated_expired") {
+      return unauthorizedError(
+        detailed.message ??
+          "API key has expired following rotation. Please use the replacement key."
+      );
+    }
+    if (detailed.reason === "key_expired") {
+      return unauthorizedError(detailed.message ?? "API key has expired.");
+    }
     return unauthorizedError(
       "Valid API key required. Use Authorization: Bearer <key> or X-API-Key header."
     );
   }
 
+  const auth = detailed.auth;
   const requiredList = Array.isArray(required) ? required : [required];
   if (!hasScope(auth.scopes, requiredList)) {
     return forbiddenError(
@@ -302,11 +413,20 @@ export async function requireScopes(
 export async function requireAuth(
   request: Request
 ): Promise<{ userId: string; keyId: string } | NextResponse> {
-  const auth = await authenticateRequest(request);
-  if (!auth) {
+  const detailed = await authenticateRequestDetailed(request);
+  if (!detailed.authenticated || !detailed.auth) {
+    if (detailed.reason === "key_rotated_expired") {
+      return unauthorizedError(
+        detailed.message ??
+          "API key has expired following rotation. Please use the replacement key."
+      );
+    }
+    if (detailed.reason === "key_expired") {
+      return unauthorizedError(detailed.message ?? "API key has expired.");
+    }
     return unauthorizedError(
       "Valid API key required. Provide Authorization: Bearer <key> or X-API-Key header."
     );
   }
-  return { userId: auth.userId, keyId: auth.keyId };
+  return { userId: detailed.auth.userId, keyId: detailed.auth.keyId };
 }

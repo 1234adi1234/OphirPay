@@ -62,6 +62,24 @@ export const GET = withMetrics("GET /api/keys", withRequestLogging(async functio
         lastUsed: true,
         createdAt: true,
         expiresAt: true,
+        rotatedAt: true,
+        rotatedFromId: true,
+        rotatedFrom: {
+          select: {
+            id: true,
+            name: true,
+            prefix: true,
+          },
+        },
+        rotations: {
+          select: {
+            id: true,
+            name: true,
+            prefix: true,
+            createdAt: true,
+            expiresAt: true,
+          },
+        },
       },
     });
     return successResponse(keys);
@@ -191,10 +209,33 @@ export const DELETE = withMetrics("DELETE /api/keys", withRequestLogging(async f
     if (!id) return badRequestError("Key ID is required");
 
     // Scoped delete — a user can only revoke their own key
+    // Unlink any children that rotated from this key first
+    if (typeof prisma.apiKey.updateMany === "function") {
+      await prisma.apiKey
+        .updateMany({
+          where: { rotatedFromId: id },
+          data: { rotatedFromId: null },
+        })
+        .catch(() => {});
+    }
+
     const result = await prisma.apiKey.deleteMany({
       where: { id, userId: auth.userId },
     });
     if (result.count === 0) return badRequestError("Key not found");
+
+    if (typeof prisma.auditLog?.create === "function") {
+      await prisma.auditLog
+        .create({
+          data: {
+            action: "api_key:revoke",
+            actor: auth.userId,
+            target: id,
+            details: { keyId: id },
+          },
+        })
+        .catch(() => {});
+    }
 
     return successResponse({ deleted: true });
   } catch (err) {
