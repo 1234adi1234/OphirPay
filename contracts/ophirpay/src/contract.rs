@@ -9,13 +9,8 @@ use crate::types::*;
 use crate::errors::*;
 use crate::events::*;
 use crate::helpers::*;
-use crate::storage::*;
-use crate::types::*;
-use crate::errors::*;
-use crate::events::*;
-use crate::helpers::*;
 // ── Contract Version ───────────────────────────────────────────
-const CONTRACT_VERSION: u32 = 2;
+pub const CONTRACT_VERSION: u32 = 2;
 
 // ── Storage-Bump Policy Constants ──────────────────────────────
 // Soroban persistent storage entries have a TTL measured in ledgers.
@@ -38,9 +33,9 @@ const CONTRACT_VERSION: u32 = 2;
 // Cold entries (roles, spending limits, escalation rules) are bumped
 // on every write as well, since the gas cost is negligible (~1 500
 // WASM instructions per extend_ttl call).
-const BUMP_MIN_TTL: u32 = 5_000;
-const BUMP_MAX_TTL: u32 = 50_000;
-const BUMP_MAINTENANCE_TTL: u32 = 100_000;
+pub const BUMP_MIN_TTL: u32 = 5_000;
+pub const BUMP_MAX_TTL: u32 = 50_000;
+pub const BUMP_MAINTENANCE_TTL: u32 = 100_000;
 
 // ── Enumeration Cap (docs/AUDIT.md MEDIUM-2, issue #742) ───────
 // Every *enumerating* reader is bounded by this many entries, newest first.
@@ -53,7 +48,7 @@ const BUMP_MAINTENANCE_TTL: u32 = 100_000;
 // an unreliable endpoint. Matches the existing 100-entry caps in
 // `get_audit_log_range`, `get_payments_range`, `get_fee_config_history` and
 // `get_reason_code_analytics`.
-const MAX_READER_ENTRIES: u32 = 100;
+pub const MAX_READER_ENTRIES: u32 = 100;
 
 // ── Contract ───────────────────────────────────────────────────
 

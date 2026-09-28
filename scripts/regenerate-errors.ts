@@ -15,7 +15,7 @@ export function generateCatalog(): string {
   const entries: { code: string; message: string }[] = [];
   let currentDoc = "";
 
-  const lines = rs.split("\n");
+  const lines = rs.split(/\r?\n/);
   for (const line of lines) {
     if (line.includes("pub enum PaymentError {")) {
       inEnum = true;

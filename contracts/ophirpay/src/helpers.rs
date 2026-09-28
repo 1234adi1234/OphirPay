@@ -8,15 +8,10 @@ use crate::storage::*;
 use crate::types::*;
 use crate::errors::*;
 use crate::events::*;
-use crate::helpers::*;
-use crate::storage::*;
-use crate::types::*;
-use crate::errors::*;
-use crate::events::*;
 /// Release the reentrancy lock after cross-contract calls complete.
 /// Prefer using the [`ReentrancyGuard`] returned by [`acquire_reentrancy_lock`],
 /// which releases automatically on drop. This is only used internally by the guard.
-fn release_reentrancy_lock(env: &Env) {
+pub fn release_reentrancy_lock(env: &Env) {
     env.storage().instance().set(&REENTRANCY_LOCK, &false);
 }
 
@@ -31,7 +26,7 @@ fn release_reentrancy_lock(env: &Env) {
 ///
 /// The multiply is therefore performed at 256-bit precision so the result is
 /// always the exact linear vesting value and can never exceed `total_amount`.
-fn compute_vested(total_amount: i128, start_time: u64, end_time: u64, now: u64) -> i128 {
+pub fn compute_vested(total_amount: i128, start_time: u64, end_time: u64, now: u64) -> i128 {
     if now >= end_time {
         return total_amount;
     }

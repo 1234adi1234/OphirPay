@@ -7,19 +7,18 @@ use soroban_sdk::{
 use crate::storage::*;
 use crate::types::*;
 use crate::errors::*;
-use crate::events::*;
 use crate::helpers::*;
-use crate::types::*;
+use crate::contract::{BUMP_MAX_TTL, BUMP_MIN_TTL};
 // ── Native Events ──────────────────────────────────────────────
 
-fn emit_payment_event(env: &Env, payer: &Address, payee: &Address, amount: &i128) {
+pub fn emit_payment_event(env: &Env, payer: &Address, payee: &Address, amount: &i128) {
     env.events().publish(
         (Symbol::new(env, "payment"), payer.clone(), payee.clone()),
         *amount,
     );
 }
 
-fn emit_escrow_event(env: &Env, depositor: &Address, beneficiary: &Address, amount: &i128) {
+pub fn emit_escrow_event(env: &Env, depositor: &Address, beneficiary: &Address, amount: &i128) {
     env.events().publish(
         (
             Symbol::new(env, "escrow"),
@@ -30,7 +29,7 @@ fn emit_escrow_event(env: &Env, depositor: &Address, beneficiary: &Address, amou
     );
 }
 
-fn emit_stream_event(env: &Env, creator: &Address, recipient: &Address, amount: &i128) {
+pub fn emit_stream_event(env: &Env, creator: &Address, recipient: &Address, amount: &i128) {
     env.events().publish(
         (
             Symbol::new(env, "stream"),
@@ -45,13 +44,13 @@ fn emit_stream_event(env: &Env, creator: &Address, recipient: &Address, amount: 
 /// instead of deserializing/serializing an 11-field ContractStats struct.
 /// Note: does NOT extend TTL — callers should batch TTL extensions at the end
 /// of each function to avoid redundant metadata writes.
-fn inc_counter(env: &Env, key: &Symbol) {
+pub fn inc_counter(env: &Env, key: &Symbol) {
     let val: u64 = env.storage().instance().get(key).unwrap_or(0);
     env.storage().instance().set(key, &val.saturating_add(1));
 }
 
 /// Add delta to a u64 counter key. Same single-key optimization.
-fn add_u64_counter(env: &Env, key: &Symbol, delta: u64) {
+pub fn add_u64_counter(env: &Env, key: &Symbol, delta: u64) {
     let val: u64 = env.storage().instance().get(key).unwrap_or(0);
     env.storage()
         .instance()
@@ -60,7 +59,7 @@ fn add_u64_counter(env: &Env, key: &Symbol, delta: u64) {
 
 /// Add delta to an i128 counter key. Same single-key optimization.
 /// Same TTL note as inc_counter.
-fn add_counter(env: &Env, key: &Symbol, delta: i128) {
+pub fn add_counter(env: &Env, key: &Symbol, delta: i128) {
     let val: i128 = env.storage().instance().get(key).unwrap_or(0);
     env.storage()
         .instance()
@@ -70,7 +69,7 @@ fn add_counter(env: &Env, key: &Symbol, delta: i128) {
 /// Track funds locked in active escrows/streams. Pass the actual amount being
 /// deposited (positive) or withdrawn (negative). Used by emergency_withdraw
 /// to prevent the owner from withdrawing user-deposited funds.
-fn add_locked(env: &Env, delta: i128) {
+pub fn add_locked(env: &Env, delta: i128) {
     let val: i128 = env.storage().instance().get(&LOCKED_BALANCE).unwrap_or(0);
     let new_val = val.saturating_add(delta);
     // Clamp at 0 — locked balance must never go negative
@@ -81,7 +80,7 @@ fn add_locked(env: &Env, delta: i128) {
 /// Compute the protocol fee for an amount at the given fee basis points.
 /// Shared by the public `calculate_fee` contract method and the internal
 /// `collect_fee` helper so fee math stays in one place.
-fn compute_fee(amount: i128, fee_bps: u32) -> i128 {
+pub fn compute_fee(amount: i128, fee_bps: u32) -> i128 {
     if fee_bps == 0 || amount <= 0 {
         return 0;
     }
@@ -92,7 +91,7 @@ fn compute_fee(amount: i128, fee_bps: u32) -> i128 {
 /// Returns the fee amount collected (0 if fees are disabled or no collector
 /// is set).  Returns an error if the fee transfer fails — which reverts
 /// the entire payment, ensuring fee collection is atomic.
-fn collect_fee(
+pub fn collect_fee(
     env: &Env,
     payer: &Address,
     asset: &Address,
@@ -123,7 +122,7 @@ fn collect_fee(
 }
 
 /// Get the current locked balance (funds held in active escrows + streams).
-fn record_audit(env: &Env, action: &str, actor: &Address, target_id: u64, details: &str) {
+pub fn record_audit(env: &Env, action: &str, actor: &Address, target_id: u64, details: &str) {
     let mut count: u64 = env.storage().instance().get(&AUDIT_CNT).unwrap_or(0);
     count = count.saturating_add(1);
     let entry = AuditEntry {
@@ -150,7 +149,7 @@ fn record_audit(env: &Env, action: &str, actor: &Address, target_id: u64, detail
 
 /// Guard: caller must be the contract owner. Deduplicates the 15+ identical
 /// owner-check blocks, reducing Wasm code size and deployment gas.
-fn require_owner(env: &Env, caller: &Address) -> Result<(), PaymentError> {
+pub fn require_owner(env: &Env, caller: &Address) -> Result<(), PaymentError> {
     let owner: Address = env
         .storage()
         .instance()
@@ -180,7 +179,7 @@ pub enum PauseScope {
 /// Map an incoming numeric scope identifier to a `PauseScope`. Unknown ids are
 /// rejected with `InvalidPauseScope` so the failure is explicit instead of a
 /// silent no-op.
-fn parse_pause_scope(scope: u32) -> Result<PauseScope, PaymentError> {
+pub fn parse_pause_scope(scope: u32) -> Result<PauseScope, PaymentError> {
     match scope {
         0 => Ok(PauseScope::Payments),
         1 => Ok(PauseScope::Escrows),
@@ -195,7 +194,7 @@ fn parse_pause_scope(scope: u32) -> Result<PauseScope, PaymentError> {
 }
 
 /// Instance-storage key holding a single scope's pause flag.
-fn pause_scope_key(env: &Env, scope: PauseScope) -> Symbol {
+pub fn pause_scope_key(env: &Env, scope: PauseScope) -> Symbol {
     let name = match scope {
         PauseScope::Payments => "SCOPE_PAYMENTS",
         PauseScope::Escrows => "SCOPE_ESCROWS",
@@ -210,7 +209,7 @@ fn pause_scope_key(env: &Env, scope: PauseScope) -> Symbol {
 }
 
 /// Whether a single scope is paused, ignoring the global flag.
-fn is_scope_flag_set(env: &Env, scope: PauseScope) -> bool {
+pub fn is_scope_flag_set(env: &Env, scope: PauseScope) -> bool {
     env.storage()
         .instance()
         .get(&pause_scope_key(env, scope))
@@ -220,7 +219,7 @@ fn is_scope_flag_set(env: &Env, scope: PauseScope) -> bool {
 /// Guard: reject all write operations while the contract is globally paused OR
 /// the scope that owns the operation is paused. The global pause is checked
 /// first so it always overrides the per-scope flags.
-fn require_not_paused(env: &Env, scope: PauseScope) -> Result<(), PaymentError> {
+pub fn require_not_paused(env: &Env, scope: PauseScope) -> Result<(), PaymentError> {
     let globally_paused: bool = env.storage().instance().get(&PAUSED).unwrap_or(false);
     if globally_paused || is_scope_flag_set(env, scope) {
         return Err(PaymentError::ContractPaused);
@@ -236,7 +235,7 @@ fn require_not_paused(env: &Env, scope: PauseScope) -> Result<(), PaymentError> 
 /// safe to `?`-return from the guarded function without leaking the lock.
 /// Because the check must reject reentrant calls even for otherwise-invalid
 /// inputs, this must be the FIRST operation in any token-moving function.
-struct ReentrancyGuard<'a> {
+pub struct ReentrancyGuard<'a> {
     env: &'a Env,
 }
 
@@ -246,7 +245,7 @@ impl Drop for ReentrancyGuard<'_> {
     }
 }
 
-fn acquire_reentrancy_lock<'a>(env: &'a Env) -> Result<ReentrancyGuard<'a>, PaymentError> {
+pub fn acquire_reentrancy_lock<'a>(env: &'a Env) -> Result<ReentrancyGuard<'a>, PaymentError> {
     let locked: bool = env
         .storage()
         .instance()

@@ -6,7 +6,6 @@ use soroban_sdk::{
 };
 use crate::storage::*;
 use crate::types::*;
-use crate::errors::*;
 use crate::events::*;
 use crate::helpers::*;
 #[contracterror]
