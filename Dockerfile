@@ -32,7 +32,13 @@ RUN npm run build
 
 # Stage 3: Runner
 FROM node:20-slim AS runner
-RUN apt-get update -qq && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+# `apt-get upgrade` is what keeps the image-scan step green: the node:20-slim
+# base ships snapshot versions of libcap2/libgnutls30/libpcre2 that Debian has
+# since revised, and every one of those findings has a fix in bookworm-updates.
+RUN apt-get update -qq \
+  && apt-get upgrade -y \
+  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 USER node
 WORKDIR /app
 
