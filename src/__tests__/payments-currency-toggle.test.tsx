@@ -112,4 +112,24 @@ describe("PaymentsPage - Fiat Display Toggle (XLM ↔ USD)", () => {
       expect(screen.getByText("(USD unavailable)")).toBeInTheDocument();
     });
   });
+
+  it("renders graceful fallback to asset unit when price is stale in USD mode", async () => {
+    vi.spyOn(priceModule, "fetchXlmPrice").mockResolvedValue({
+      price: 0.15,
+      source: "cached",
+      isStale: true,
+      staleAgeMs: 360000,
+      timestamp: Date.now() - 360000,
+    });
+
+    // Set initial localStorage to USD
+    window.localStorage.setItem("ophirpay-currency-display", JSON.stringify("USD"));
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("10.00 XLM")).toBeInTheDocument();
+      expect(screen.getByText("(USD price stale)")).toBeInTheDocument();
+    });
+  });
 });
