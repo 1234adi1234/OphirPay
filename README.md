@@ -81,6 +81,7 @@
 - [📊 Database Schema](docs/SCHEMA.md)
 - [🚀 Deployment Guide](docs/DEPLOYMENT.md)
 - [📡 SSE Event Stream](docs/SSE.md)
+- [⚡ WebSocket Event Server](docs/WEBSOCKET.md)
 - [📖 SSE Integration & Architecture](docs/SSE_DOCUMENTATION.md)
 - [📜 Smart-contract SSE Reference](docs/CONTRACT_SSE_REFERENCE.md)
 - [🧪 Prisma CI & Testing](docs/PRISMA-CI.md)
@@ -110,7 +111,7 @@ Most blockchain payment tools are either developer-facing SDKs or complex enterp
 | **Real-time event streaming** (SSE) | ✅ | ❌ |
 | **Webhook delivery** (HMAC signed, retries) | ✅ | ❌ |
 | **Cross-contract communication** | ✅ | ❌ |
-| **Multi-wallet support** (6 wallets: Freighter, xBull, Rabet, Albedo, Lobstr, Ledger) | ✅ | ❌ |
+| **Multi-wallet support** (5 wallets: Freighter, xBull, Rabet, Albedo, Lobstr; Ledger pending) | ✅ | ❌ |
 | **Multi-asset support** (USDC, custom tokens) | ✅ | ❌ |
 | **Path payments** (cross-asset sends, rate preview, slippage protection) | ✅ | ❌ |
 | **PWA with offline support** | ✅ | ❌ |
@@ -301,7 +302,7 @@ OphirPay supports multiple Stellar wallets through a unified connector abstracti
 
 | Feature | Implementation |
 |---|---|
-| **Multi-wallet** | Connector interface for Freighter, Albedo, xBull, Rabet, Lobstr, Ledger |
+| **Multi-wallet** | Connector interface for Freighter, Albedo, xBull, Rabet, Lobstr (the Ledger connector is pending) |
 | **Connect** | Wallet selector modal → `connector.connect()` |
 | **Disconnect** | Full state reset + connector-specific cleanup |
 | **Session persistence** | Auto-detects existing connections on page load |
@@ -320,7 +321,18 @@ OphirPay supports multiple Stellar wallets through a unified connector abstracti
 | Rabet | Browser extension | ✅ Supported |
 | Albedo | Web-based (no extension) | ✅ Supported |
 | Lobstr | Web-based (SEP-7) | ✅ Supported |
-| Ledger | Hardware (WebUSB/HID) | ✅ Supported |
+| Ledger | Hardware (WebUSB) | ⏳ Pending — connector is a stub, not offered in the selector |
+
+> ⏳ **Ledger is pending.** `src/lib/wallets/ledger.ts` is a stub: it detects
+> WebUSB but the `@ledgerhq/hw-transport-webusb` and `@ledgerhq/hw-app-str`
+> packages are not dependencies, so it cannot sign a transaction. It is marked
+> `pending` in the wallet registry and is therefore not offered in the wallet
+> selector (no "Unable to connect" dead end). Even once implemented, Ledger
+> browser signing requires **WebUSB**, which only Chromium-based browsers
+> (Chrome, Edge, Brave, Opera) expose, over HTTPS or `localhost`, with the
+> Stellar app open on the device. See
+> [docs/STELLAR_101.md](docs/STELLAR_101.md#wallet-connectors--ledger-status).
+> Until then, use Freighter, xBull, Rabet, Albedo or Lobstr.
 
 ```tsx
 // Consuming the wallet anywhere in your app
@@ -340,13 +352,13 @@ connect("albedo");  // or "freighter", "xbull"
 
 ## 📡 Real-Time Events
 
-OphirPay streams **live blockchain events** via Server-Sent Events (SSE). The endpoint polls the deployed `PaymentEventEmitter` contract every 10 seconds, detecting new payment events and pushing them to connected clients.
+OphirPay delivers **live blockchain events** through a resilient dual-transport architecture. A standalone **WebSocket server** (`ws(s)://<host>:8787/api/events`) provides low-latency push delivery with automatic keep-alive pings, while a **Server-Sent Events (SSE)** endpoint (`GET /api/events`) acts as the transparent HTTP fallback. Both transports share the identical event payload schema sourced from the deployed `PaymentEventEmitter` Soroban contract.
 
 ```
-Browser ←──SSE stream─── GET /api/events ──polls──→ PaymentEventEmitter (Soroban)
-                                                      ↓
-                                                 get_event_count()
-                                                 get_event(id)
+Browser ←── WS:  ws(s)://<host>:8787/api/events ──polls──→ PaymentEventEmitter (Soroban)
+        ←── SSE: GET /api/events (fallback)                 ↓
+                                                       get_event_count()
+                                                       get_event(id)
 ```
 
 **Events emitted:**
@@ -354,14 +366,14 @@ Browser ←──SSE stream─── GET /api/events ──polls──→ Paymen
 | Event | Trigger |
 |---|---|
 | `connected` | Stream established |
-| `heartbeat` | Every 15 seconds (keep-alive) |
+| `heartbeat` | Every 15 seconds (SSE) / 30 seconds (WS keep-alive) |
 | `payment:created` | New payment event detected on-chain |
 
 Visit **`/events`** in the app to see the live feed with connection status indicator, event type badges, timestamps, and auto-scroll.
 
-> 📡 **Client integrations:** see [docs/SSE.md](docs/SSE.md) for the full stream
-> contract — payload schemas for every event type, heartbeat/error behavior,
-> reconnection semantics, and example client code (browser, React, cURL).
+> ⚡ **WebSocket server & protocol:** see [docs/WEBSOCKET.md](docs/WEBSOCKET.md) for the standalone RFC 6455 WebSocket implementation, message schemas, reconnection and fallback lifecycle, port configuration, and deployment architecture.
+>
+> 📡 **Client integrations (SSE):** see [docs/SSE.md](docs/SSE.md) for the full Server-Sent Events stream contract, payload schemas, reconnection semantics, and load testing guide.
 
 ---
 
@@ -691,7 +703,10 @@ Path-scoped workflows add Prisma schema/migration replay
 the integration-branch guard (`enforce-integration-branch.yml`), dependency
 scanning (`dependency-scan.yml`), PR auto-labeling (`pr-labeler.yml`),
 security scorecard (`scorecard.yml`), issue staleness (`stale.yml`), database
-backups (`db-backup.yml`), and scheduled payments (`scheduled-payments-cron.yml`).
+backups (`db-backup.yml`), scheduled payments (`scheduled-payments-cron.yml`),
+the nightly E2E suite (`e2e-nightly.yml`), the Docker image smoke test
+(`docker-smoke.yml`), and the weekly load-test baseline gate (`load-test.yml`, see
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
 
 **→ [View the latest core CI run](https://github.com/OphirPay/OphirPay/actions/workflows/ci.yml)**
 
@@ -740,7 +755,7 @@ backups (`db-backup.yml`), and scheduled payments (`scheduled-payments-cron.yml`
 | **Styling** | [Tailwind CSS v4](https://tailwindcss.com) | Utility-first, dark mode, custom theme |
 | **Blockchain** | [Stellar SDK v13](https://stellar.org) + [Soroban](https://soroban.stellar.org) | Horizon, Soroban RPC, TX building |
 | **Contracts** | [Rust](https://www.rust-lang.org) + `soroban-sdk` 27 | WASM compilation, cross-contract invocation |
-| **Wallet** | [Freighter](https://freighter.app) · [xBull](https://xbull.app) · [Rabet](https://rabet.io) · [Albedo](https://albedo.link) · [Lobstr](https://lobstr.co) · [Ledger](https://ledger.com) | 6-wallet connector abstraction |
+| **Wallet** | [Freighter](https://freighter.app) · [xBull](https://xbull.app) · [Rabet](https://rabet.io) · [Albedo](https://albedo.link) · [Lobstr](https://lobstr.co) · [Ledger](https://ledger.com) (pending) | 5-wallet connector abstraction + pending Ledger connector |
 | **Database** | [Prisma](https://prisma.io) + PostgreSQL (Neon) / SQLite | Type-safe ORM, provider switching |
 | **Testing** | [Vitest](https://vitest.dev) + React Testing Library + [Playwright](https://playwright.dev) | Unit, integration & E2E coverage |
 | **CI/CD** | [GitHub Actions](https://github.com/features/actions) | Gating pipeline on every PR |
@@ -804,7 +819,8 @@ We follow [Conventional Commits](https://www.conventionalcommits.org):
 | ✅ SSE event streaming from chain | **Done** |
 | ✅ Mobile responsive UI | **Done** |
 | ✅ CI/CD pipeline + 806 app tests + 67 contract tests + 97 e2e | **Done** |
-| ✅ Multi-wallet support (Freighter, Albedo, xBull, Rabet, Lobstr, Ledger) | **Done** |
+| ✅ Multi-wallet support (Freighter, Albedo, xBull, Rabet, Lobstr) | **Done** |
+| ⏳ Ledger hardware wallet connector | **Pending** — WebUSB integration not shipped |
 | ✅ Stellar assets (USDC, custom tokens, trustline checks) | **Done** |
 | ✅ Payment request links (shareable invoices, QR codes) | **Done** |
 | ✅ Webhook delivery (HMAC signed, retries) | **Done** |

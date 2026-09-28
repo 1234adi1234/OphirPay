@@ -88,6 +88,7 @@ Complete list of every endpoint declared in [`docs/openapi.yaml`](openapi.yaml).
 | `/api/multisig/execute` | POST |
 | `/api/multisig/requests` | GET |
 | `/api/governance/proposals` | GET, POST |
+| `/api/governance/proposals/{id}` | GET |
 | `/api/governance/vote` | POST |
 | `/api/governance/execute` | POST |
 | `/api/analytics` | GET |
@@ -101,6 +102,7 @@ Complete list of every endpoint declared in [`docs/openapi.yaml`](openapi.yaml).
 | `/api/events` | GET |
 | `/api/events/history` | GET |
 | `/api/health` | GET |
+| `/api/health/live` | GET |
 | `/api/metrics` | GET |
 | `/api/cron` | GET, POST |
 | `/api/jobs/process-due-recurring` | POST |
@@ -515,6 +517,27 @@ curl -X POST "https://api.ophirpay.com/api/multisig/propose" \
 }
 ```
 
+### Fetch a Governance Proposal
+```bash
+curl -X GET "https://api.ophirpay.com/api/governance/proposals/12" \
+  -H "Authorization: Bearer ophir_live_sk_8f7b2c9e4a1d0f62b8e3c1a9"
+```
+**Response (`200 OK`):**
+```json
+{
+  "proposal": { "id": 12, "title": "Raise the protocol fee cap", "status": "ACTIVE", "yes_votes": 42, "no_votes": 7 },
+  "config": { "quorum": 10, "approval_threshold_bps": 6000 },
+  "voteHistory": [
+    {
+      "voter": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+      "support": true,
+      "transactionHash": "3f9821a0b4e5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1",
+      "recordedAt": "2026-08-26T19:04:11.000Z"
+    }
+  ]
+}
+```
+
 ---
 
 ## 10. Analytics & Refunds
@@ -605,11 +628,43 @@ event: payment.completed
 data: {"id":"pay_98234ab1c09d","amount":"250.00","asset":"USDC","status":"COMPLETED","transactionHash":"9b12a84efc713b194d3f5481d9f8e4c3a2105e6b7d8c9a0f1e2d3c4b5a6f7e8d"}
 ```
 
+### Page Through Event History (cursor pagination)
+
+The event-history reader uses the same opaque keyset cursor as the payments
+list (issue #746). Pass `limit` (1–100, default 50) and the `nextCursor` from
+the previous response to walk back through on-chain events without re-reading
+or skipping records.
+
+```bash
+# First page
+curl -X GET "https://api.ophirpay.com/api/events/history?limit=50"
+
+# Next page — reuse meta.nextCursor
+curl -X GET "https://api.ophirpay.com/api/events/history?limit=50&cursor=<meta.nextCursor>"
+```
+
+**Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "data": {
+    "events": [
+      { "id": "evt_42", "type": "payment.created", "payer": "G...", "payee": "G...", "amount": 125000000, "txHash": "cafebabe", "timestamp": 1724000000 }
+    ],
+    "total": 842
+  },
+  "meta": { "limit": 50, "nextCursor": "eyJjcmVhdGVkQXQiOi...", "hasMore": true, "timestamp": "2026-08-29T09:00:00.000Z" }
+}
+```
+
+Events are ordered newest-first by on-chain id (`id DESC`). `meta.nextCursor`
+is `null` on the last page; an invalid cursor returns `400`.
+
 ---
 
 ## 12. System Health & Metrics
 
-### Check System Health
+### Check System Health (readiness)
 ```bash
 curl -X GET "https://api.ophirpay.com/api/health"
 ```
@@ -622,6 +677,33 @@ curl -X GET "https://api.ophirpay.com/api/health"
   "sorobanRpc": "connected",
   "database": "connected",
   "timestamp": "2026-08-26T19:10:00.000Z"
+}
+```
+This is the **readiness** signal: it pings the database (critical), Soroban RPC,
+Horizon and Redis, and returns `503` while the database is unreachable. Wire it
+to a Kubernetes `readinessProbe` so traffic drains without a restart.
+
+### Check Liveness (`/api/health/live`)
+
+The **liveness** signal performs no dependency I/O — it only proves the process
+is up and serving HTTP. Use it for container healthchecks and
+`livenessProbe`, so a transient Postgres/RPC/Redis outage cannot restart-loop a
+healthy container. It is exempt from the global rate limiter.
+
+```bash
+curl -X GET "https://api.ophirpay.com/api/health/live"
+```
+**Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "data": {
+    "status": "ok",
+    "probe": "liveness",
+    "version": "0.1.0",
+    "uptime": 4123.5
+  },
+  "meta": { "timestamp": "2026-09-25T03:00:00.000Z" }
 }
 ```
 
