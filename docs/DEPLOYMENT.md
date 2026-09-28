@@ -235,6 +235,14 @@ The `Dockerfile` uses a 3-stage build:
 - Final image runs as **non-root** user for security
 - Standalone output is used (configured in `next.config.ts`)
 - The runner stage declares a `HEALTHCHECK` (issue #738) — see below
+- **The runner stage does NOT copy the full `node_modules` from the builder** (issue #737).
+  Next's `output: "standalone"` creates `.next/standalone/node_modules/` with a pruned set of
+  only the runtime dependencies the server actually needs. Copying the full builder
+  `node_modules` on top would double the image size and ship every devDependency
+  (TypeScript, Prisma CLI, Tailwind, Playwright, Puppeteer) into the distroless layer —
+  defeating the purpose of standalone output.  The runner stage only copies the native
+  Prisma query-engine binary, which the standalone tracer intentionally omits because it
+  is platform-specific.
 
 ### Liveness vs readiness
 
