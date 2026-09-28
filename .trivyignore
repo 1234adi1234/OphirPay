@@ -1,0 +1,2 @@
+# Trivy vulnerabilities suppressions
+# Add CVE IDs here to ignore them during container image scanning
