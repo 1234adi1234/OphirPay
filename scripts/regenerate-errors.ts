@@ -5,7 +5,7 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const rustPath = path.join(__dirname, "../contracts/ophirpay/src/lib.rs");
+const rustPath = path.join(__dirname, "../contracts/ophirpay/src/errors.rs");
 const tsPath = path.join(__dirname, "../src/lib/contract-errors.ts");
 
 export function generateCatalog(): string {
