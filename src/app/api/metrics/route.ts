@@ -107,6 +107,10 @@ function buildMetrics(): string {
     "# TYPE ophirpay_webhooks_failed_total counter",
     `ophirpay_webhooks_failed_total ${c.webhooks_failed_total}`,
     "",
+    "# HELP ophirpay_webhooks_dead_letter_total Total webhooks moved to the dead-letter queue after exhausting retries",
+    "# TYPE ophirpay_webhooks_dead_letter_total counter",
+    `ophirpay_webhooks_dead_letter_total ${c.webhooks_dead_letter_total}`,
+    "",
     "# HELP ophirpay_delivery_attempts_total Total delivery attempts by delivery type and attempt number",
     "# TYPE ophirpay_delivery_attempts_total counter",
     ...c.delivery_attempts.map(

@@ -220,6 +220,15 @@ export const webhookReplaySchema = z.object({
 
 export const webhookDeliveriesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional().default(20),
+  status: z.enum(["SUCCESS", "FAILED", "DEAD_LETTER"]).optional(),
+  deadLetterOnly: z
+    .preprocess((val) => val === "true" || val === true || val === "1" || val === 1, z.boolean())
+    .optional(),
+});
+
+export const bulkRedeliverDeadLettersSchema = z.object({
+  deliveryIds: z.array(z.string().min(1)).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional().default(50),
 });
 
 // ── API Key Schemas ───────────────────────────────────────────

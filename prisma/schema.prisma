@@ -537,6 +537,8 @@ model WebhookDelivery {
   latencyMs     Int?
   attempts      Int            @default(1)
   errorMessage  String?
+  failureReason String?
+  isDeadLettered Boolean       @default(false)
   isReplay      Boolean        @default(false)
   replayBatchId String?
   test          Boolean        @default(false)
@@ -556,11 +558,14 @@ model WebhookDelivery {
 
   @@index([webhookId, deliveredAt])
   @@index([replayBatchId])
+  @@index([webhookId, status])
+  @@index([webhookId, isDeadLettered])
 }
 
 enum DeliveryStatus {
   SUCCESS
   FAILED
+  DEAD_LETTER
 }
 
 

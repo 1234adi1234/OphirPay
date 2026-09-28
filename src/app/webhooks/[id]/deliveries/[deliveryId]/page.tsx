@@ -17,10 +17,14 @@ interface DeliveryData {
   signature: string | null;
   requestHeaders: string | null;
   test: boolean;
-  status: number | null;
+  status: string | number | null;
+  responseCode?: number | null;
   responseBody: string | null;
   durationMs: number | null;
   error: string | null;
+  failureReason?: string | null;
+  isDeadLettered?: boolean;
+  attempts?: number;
   createdAt: string;
 }
 
@@ -62,6 +66,9 @@ export default function WebhookDeliveryPage() {
         <div className="flex items-center gap-2 mt-1">
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Webhook delivery</h1>
           {delivery.test && <Badge variant="info">Test event</Badge>}
+          {(delivery.isDeadLettered || delivery.status === "DEAD_LETTER") && (
+            <Badge variant="warning">Dead Letter</Badge>
+          )}
         </div>
       </div>
 
@@ -100,6 +107,20 @@ export default function WebhookDeliveryPage() {
             {new Date(delivery.createdAt).toLocaleString()}
           </p>
         </div>
+        {delivery.attempts != null && (
+          <div>
+            <p className="text-xs text-gray-400 mb-1">Delivery attempts</p>
+            <p className="text-sm text-gray-600 dark:text-gray-300 font-mono">
+              {delivery.attempts} attempt{delivery.attempts !== 1 ? "s" : ""}
+            </p>
+          </div>
+        )}
+        {delivery.failureReason && (
+          <div>
+            <p className="text-xs text-gray-400 mb-1">Failure reason</p>
+            <Badge variant="danger">{delivery.failureReason}</Badge>
+          </div>
+        )}
         {delivery.error && (
           <div className="p-3 rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800">
             <p className="text-sm text-red-600 dark:text-red-400">{delivery.error}</p>

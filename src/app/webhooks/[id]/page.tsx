@@ -53,6 +53,46 @@ interface TestResult {
   preview?: RequestPreview;
 }
 
+interface DeadLetterDelivery {
+  id: string;
+  eventId: string;
+  eventType: string;
+  eventTimestamp: string;
+  payload: string;
+  status: string;
+  isDeadLettered: boolean;
+  responseCode: number | null;
+  responseBody: string | null;
+  latencyMs: number | null;
+  attempts: number;
+  errorMessage: string | null;
+  failureReason: string | null;
+  targetUrl: string | null;
+  deliveredAt: string;
+}
+
+interface DeliveryStats {
+  webhookId: string;
+  counts: {
+    total: number;
+    successful: number;
+    failed: number;
+    deadLetter: number;
+  };
+  metrics: {
+    webhooks_delivered_total: number;
+    webhooks_failed_total: number;
+    webhooks_dead_letter_total: number;
+    delivery_attempts: Array<{ delivery_type: string; attempt_number: number; count: number }>;
+    delivery_final_outcomes: Array<{
+      delivery_type: string;
+      attempt_number: number;
+      final_outcome: string;
+      count: number;
+    }>;
+  };
+}
+
 export default function WebhookDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -94,6 +134,57 @@ export default function WebhookDetailPage() {
       return JSON.parse(events) as WebhookEventType[];
     } catch {
       return [];
+    }
+  };
+
+  const [bulkRedelivering, setBulkRedelivering] = useState(false);
+
+  const {
+    data: rawDeadLetters,
+    isLoading: deadLettersLoading,
+    refetch: refetchDeadLetters,
+  } = useApiQuery<DeadLetterDelivery[]>(
+    ["dead-letter-deliveries", id],
+    id ? `/api/webhooks/${id}/deliveries/dead-letter` : undefined,
+    { enabled: Boolean(id) },
+  );
+  const deadLetters = Array.isArray(rawDeadLetters) ? rawDeadLetters : [];
+
+  const { data: statsData } = useApiQuery<DeliveryStats>(
+    ["webhook-delivery-stats", id],
+    id ? `/api/webhooks/${id}/deliveries/stats` : undefined,
+    { enabled: Boolean(id) },
+  );
+
+  const bulkRedeliverMutation = useApiMutation<
+    { deliveryIds?: string[] },
+    { batchId: string; totalSelected: number; succeeded: number; failed: number }
+  >(`/api/webhooks/${id}/deliveries/dead-letter`, {
+    invalidateKeys: [
+      ["dead-letter-deliveries", id],
+      ["webhook-delivery-stats", id],
+      ["webhook-deliveries", id],
+    ],
+  });
+
+  const handleBulkRedeliver = async () => {
+    if (!webhook?.isActive) {
+      toast.error("Webhook is paused", "Activate it before redelivering.");
+      return;
+    }
+    setBulkRedelivering(true);
+    try {
+      const res = await bulkRedeliverMutation.mutateAsync({});
+      toast.success(
+        "Bulk redelivery complete",
+        `${res.succeeded} succeeded, ${res.failed} failed.`,
+      );
+      await refetchDeadLetters();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to redeliver dead letters.";
+      toast.error("Bulk redelivery failed", msg);
+    } finally {
+      setBulkRedelivering(false);
     }
   };
 
@@ -320,6 +411,118 @@ export default function WebhookDetailPage() {
             <div>
               <p className="text-xs text-gray-400 mb-1">Headers</p>
               <pre className="text-xs bg-gray-900 text-blue-300 rounded-lg p-4 overflow-x-auto whitespace-pre-wrap break-words">{Object.entries(preview.headers).map(([key, value]) => `${key}: ${value}`).join("\n")}</pre>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── Dead-Letter Queue Panel ─────────────────────────── */}
+      <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-5 space-y-4">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold text-gray-900 dark:text-white">Dead-Letter Queue</h2>
+              {deadLetters.length > 0 ? (
+                <Badge variant="warning">{deadLetters.length} pending</Badge>
+              ) : (
+                <Badge variant="success">Clean</Badge>
+              )}
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              Events that exhausted delivery retries land here with their payload and failure reasons retained.
+            </p>
+          </div>
+          {deadLetters.length > 0 && (
+            <Button
+              onClick={handleBulkRedeliver}
+              disabled={bulkRedelivering || !webhook.isActive}
+            >
+              {bulkRedelivering ? "Redelivering…" : `Bulk Redeliver (${deadLetters.length})`}
+            </Button>
+          )}
+        </div>
+
+        {deadLettersLoading ? (
+          <p className="text-xs text-gray-400">Loading dead-letter deliveries…</p>
+        ) : deadLetters.length === 0 ? (
+          <p className="text-xs text-gray-400">No webhooks currently in dead-letter state.</p>
+        ) : (
+          <div className="space-y-2">
+            {deadLetters.map((d) => (
+              <div
+                key={d.id}
+                className="flex items-center justify-between gap-3 text-xs bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 rounded-lg p-3"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono font-medium text-gray-900 dark:text-white">{d.eventType}</span>
+                    <Badge variant="warning">{d.failureReason || "RETRIES_EXHAUSTED"}</Badge>
+                  </div>
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 truncate">
+                    {d.errorMessage || "Delivery exhausted retries"} ({d.attempts} attempt{d.attempts !== 1 ? "s" : ""})
+                  </p>
+                </div>
+                <div className="flex items-center gap-3 shrink-0">
+                  <span className="text-gray-400">
+                    {new Date(d.deliveredAt).toLocaleTimeString()}
+                  </span>
+                  <Link
+                    href={`/webhooks/${id}/deliveries/${d.id}`}
+                    className="text-xs text-ophir-600 dark:text-ophir-400 hover:underline"
+                  >
+                    View Record →
+                  </Link>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ── Delivery Metrics Dashboard Panel ───────────────── */}
+      <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-5 space-y-4">
+        <h2 className="text-sm font-semibold text-gray-900 dark:text-white">Delivery Outcome &amp; Attempt Metrics</h2>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div className="p-3 rounded-lg bg-gray-50 dark:bg-gray-800">
+            <p className="text-xs text-gray-400">Total Deliveries</p>
+            <p className="text-xl font-bold text-gray-900 dark:text-white mt-1">
+              {statsData?.counts.total ?? 0}
+            </p>
+          </div>
+          <div className="p-3 rounded-lg bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-800/40">
+            <p className="text-xs text-green-700 dark:text-green-300">Delivered</p>
+            <p className="text-xl font-bold text-green-700 dark:text-green-300 mt-1">
+              {statsData?.counts.successful ?? 0}
+            </p>
+          </div>
+          <div className="p-3 rounded-lg bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800/40">
+            <p className="text-xs text-red-700 dark:text-red-300">Failed</p>
+            <p className="text-xl font-bold text-red-700 dark:text-red-300 mt-1">
+              {statsData?.counts.failed ?? 0}
+            </p>
+          </div>
+          <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40">
+            <p className="text-xs text-amber-700 dark:text-amber-300">Dead-Lettered</p>
+            <p className="text-xl font-bold text-amber-700 dark:text-amber-300 mt-1">
+              {statsData?.counts.deadLetter ?? 0}
+            </p>
+          </div>
+        </div>
+
+        {statsData?.metrics.delivery_attempts && statsData.metrics.delivery_attempts.length > 0 && (
+          <div>
+            <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
+              Attempt Breakdown
+            </h3>
+            <div className="flex flex-wrap gap-2">
+              {statsData.metrics.delivery_attempts.map((att) => (
+                <span
+                  key={att.attempt_number}
+                  className="px-2.5 py-1 rounded-md bg-gray-100 dark:bg-gray-800 text-xs text-gray-700 dark:text-gray-300 font-mono"
+                >
+                  Attempt {att.attempt_number}: {att.count}
+                </span>
+              ))}
             </div>
           </div>
         )}

@@ -13,8 +13,8 @@ import { webhookDeliveriesQuerySchema } from "@/lib/validation-schemas";
 /**
  * GET /api/webhooks/[id]/deliveries
  *
- * Returns delivery history for a webhook (original + replay attempts).
- * Used by the dashboard to surface delivery status.
+ * Returns delivery history for a webhook (original, replay, and dead-letter deliveries).
+ * Used by the dashboard to surface delivery status and query dead-lettered deliveries.
  */
 export async function GET(
   request: Request,
@@ -39,10 +39,20 @@ export async function GET(
       return badRequestError(parsed.error.issues.map((e) => e.message).join("; "));
     }
 
-    const { limit } = parsed.data;
+    const { limit, status, deadLetterOnly } = parsed.data;
+
+    const where: Record<string, unknown> = { webhookId: webhook.id };
+    if (deadLetterOnly) {
+      where.OR = [
+        { status: "DEAD_LETTER" },
+        { isDeadLettered: true },
+      ];
+    } else if (status) {
+      where.status = status;
+    }
 
     const deliveries = await prisma.webhookDelivery.findMany({
-      where: { webhookId: webhook.id },
+      where,
       orderBy: { deliveredAt: "desc" },
       take: limit,
       select: {
@@ -53,10 +63,16 @@ export async function GET(
         isReplay: true,
         replayBatchId: true,
         deliveredAt: true,
+        latencyMs: true,
+        attempts: true,
+        errorMessage: true,
+        failureReason: true,
+        isDeadLettered: true,
         event: {
           select: {
             event: true,
             timestamp: true,
+            data: true,
           },
         },
       },
@@ -73,6 +89,12 @@ export async function GET(
         isReplay: d.isReplay,
         replayBatchId: d.replayBatchId,
         deliveredAt: d.deliveredAt.toISOString(),
+        latencyMs: d.latencyMs,
+        attempts: d.attempts,
+        errorMessage: d.errorMessage,
+        failureReason: d.failureReason,
+        isDeadLettered: d.isDeadLettered || d.status === "DEAD_LETTER",
+        payload: d.event.data,
       })),
       { limit, total: deliveries.length },
     );

@@ -16,6 +16,7 @@ const counters = {
   batches_processed_total: 0,
   webhooks_delivered_total: 0,
   webhooks_failed_total: 0,
+  webhooks_dead_letter_total: 0,
   db_query_duration_seconds_sum: 0,
   db_query_duration_seconds_count: 0,
   /** Gauge: currently open SSE event-stream connections (inc on connect, dec on disconnect). */
@@ -57,7 +58,7 @@ export function getRpcFailoverSnapshot(): typeof lastRpcFailover {
 
 export type MetricName = keyof typeof counters;
 export type DeliveryType = "webhook" | "batch";
-export type DeliveryFinalOutcome = "success" | "failure";
+export type DeliveryFinalOutcome = "success" | "failure" | "dead_letter";
 
 export interface DeliveryAttemptMetric {
   delivery_type: DeliveryType;

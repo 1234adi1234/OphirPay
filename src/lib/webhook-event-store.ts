@@ -56,20 +56,35 @@ export async function storeWebhookEvent(
   return row.id;
 }
 
+export interface RecordWebhookDeliveryOptions {
+  responseCode?: number;
+  latencyMs?: number;
+  attempts?: number;
+  errorMessage?: string;
+  failureReason?: string;
+  isDeadLettered?: boolean;
+  isReplay?: boolean;
+  replayBatchId?: string;
+  targetUrl?: string;
+  canonicalBody?: string;
+  requestBody?: string;
+  signature?: string;
+  requestHeaders?: string;
+  responseBody?: string;
+  durationMs?: number;
+  error?: string;
+  test?: boolean;
+}
+
 /** Record a delivery attempt (original or replay) for dashboard visibility. */
 export async function recordWebhookDelivery(
   webhookId: string,
   eventId: string,
   status: DeliveryStatus,
-  options?: {
-    responseCode?: number;
-    latencyMs?: number;
-    attempts?: number;
-    errorMessage?: string;
-    isReplay?: boolean;
-    replayBatchId?: string;
-  },
+  options?: RecordWebhookDeliveryOptions,
 ): Promise<string> {
+  const isDeadLetter =
+    status === "DEAD_LETTER" || Boolean(options?.isDeadLettered);
   const row = await prisma.webhookDelivery.create({
     data: {
       webhookId,
@@ -79,11 +94,58 @@ export async function recordWebhookDelivery(
       latencyMs: options?.latencyMs,
       attempts: options?.attempts ?? 1,
       errorMessage: options?.errorMessage,
+      failureReason: options?.failureReason,
+      isDeadLettered: options?.isDeadLettered ?? isDeadLetter,
       isReplay: options?.isReplay ?? false,
       replayBatchId: options?.replayBatchId,
+      targetUrl: options?.targetUrl,
+      canonicalBody: options?.canonicalBody,
+      requestBody: options?.requestBody,
+      signature: options?.signature,
+      requestHeaders: options?.requestHeaders,
+      responseBody: options?.responseBody,
+      durationMs: options?.durationMs ?? options?.latencyMs,
+      error: options?.error ?? options?.errorMessage,
+      test: options?.test ?? false,
     },
   });
   return row.id;
+}
+
+export interface DeadLetterQueryOptions {
+  webhookId: string;
+  limit?: number;
+}
+
+/**
+ * Retrieve exhausted deliveries in dead-letter state with retained payload and failure details.
+ */
+export async function getDeadLetterDeliveries(
+  webhookId: string,
+  limit = 50,
+) {
+  const boundedLimit = Math.min(100, Math.max(1, limit));
+  return prisma.webhookDelivery.findMany({
+    where: {
+      webhookId,
+      OR: [
+        { status: "DEAD_LETTER" },
+        { isDeadLettered: true },
+      ],
+    },
+    orderBy: { deliveredAt: "desc" },
+    take: boundedLimit,
+    include: {
+      event: {
+        select: {
+          id: true,
+          event: true,
+          timestamp: true,
+          data: true,
+        },
+      },
+    },
+  });
 }
 
 /** Resolve and clamp replay window + limit to safe bounds. */

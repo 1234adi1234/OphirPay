@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT
 
 import { logger } from "@/lib/logger";
-import { incMetric } from "@/lib/metrics-counters";
+import {
+  incDeliveryAttempt,
+  incDeliveryFinalOutcome,
+  incMetric,
+} from "@/lib/metrics-counters";
 import { isSafeWebhookUrlAtDelivery } from "@/lib/webhook-url-guard";
 import {
   fetchWithTimeout,
@@ -24,6 +28,8 @@ export interface WebhookDeliveryResult {
   latencyMs: number;
   attempts: number;
   errorMessage?: string;
+  failureReason?: string;
+  isDeadLettered?: boolean;
 }
 
 export const WEBHOOK_TIMESTAMP_HEADER = "X-OphirPay-Timestamp";
@@ -79,6 +85,13 @@ export interface WebhookDeliveryDetails extends WebhookDeliveryResult {
   blocked: boolean;
   error: string | null;
   request: WebhookRequestPreview;
+  failureReason?: string;
+  isDeadLettered?: boolean;
+}
+
+export interface DeliverWebhookOptions {
+  maxRetries?: number;
+  timeoutMs?: number;
 }
 
 export function buildWebhookRequestPreview(
@@ -103,13 +116,24 @@ export async function deliverWebhook(
   url: string,
   secret: string,
   payload: WebhookPayload,
-  maxRetries = 3
+  maxRetriesOrOptions: number | DeliverWebhookOptions = 3,
+  maybeOptions?: DeliverWebhookOptions
 ): Promise<WebhookDeliveryDetails> {
+  const maxRetries =
+    typeof maxRetriesOrOptions === "number"
+      ? maxRetriesOrOptions
+      : maxRetriesOrOptions?.maxRetries ?? 3;
+  const timeoutMs =
+    (typeof maxRetriesOrOptions === "object" ? maxRetriesOrOptions?.timeoutMs : undefined) ??
+    maybeOptions?.timeoutMs ??
+    getWebhookTimeoutMs();
+
   const startedAt = Date.now();
   const request = buildWebhookRequestPreview(payload, secret);
   let lastStatusCode: number | undefined;
   let lastResponseBody = "";
   let lastError: string | undefined;
+  let lastFailureReason: string | undefined;
   let attempts = 0;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -119,6 +143,8 @@ export async function deliverWebhook(
         { url, attempt }
       );
       incMetric("webhooks_failed_total");
+      incMetric("webhooks_dead_letter_total");
+      incDeliveryFinalOutcome("webhook", Math.max(1, attempts), "failure");
       const latencyMs = Date.now() - startedAt;
       return {
         success: false,
@@ -126,6 +152,8 @@ export async function deliverWebhook(
         latencyMs,
         attempts,
         errorMessage: BLOCKED_WEBHOOK_TARGET_ERROR,
+        failureReason: "BLOCKED_TARGET",
+        isDeadLettered: true,
         delivered: false,
         status: lastStatusCode ?? null,
         responseBody: lastResponseBody,
@@ -137,8 +165,10 @@ export async function deliverWebhook(
     }
 
     attempts = attempt;
+    incDeliveryAttempt("webhook", attempt);
+
     try {
-      // Explicit, configurable timeout + AbortSignal (issue #747): a hung
+      // Explicit, configurable timeout + AbortSignal (issue #747, #806): a hung
       // endpoint aborts here instead of blocking the request budget.
       const response = await fetchWithTimeout(
         url,
@@ -148,7 +178,7 @@ export async function deliverWebhook(
           body: request.body,
           redirect: "manual",
         },
-        { timeoutMs: getWebhookTimeoutMs(), label: "Webhook delivery" }
+        { timeoutMs, label: "Webhook delivery" }
       );
       const responseBody = typeof response.text === "function" ? await response.text() : "";
       lastResponseBody = responseBody;
@@ -157,12 +187,15 @@ export async function deliverWebhook(
       if (response.ok) {
         logger.info("Webhook delivered", { url, event: payload.event, attempt });
         incMetric("webhooks_delivered_total");
+        incDeliveryFinalOutcome("webhook", attempt, "success");
         const latencyMs = Date.now() - startedAt;
         return {
           success: true,
           statusCode: response.status,
           latencyMs,
           attempts: attempt,
+          failureReason: undefined,
+          isDeadLettered: false,
           delivered: true,
           status: response.status,
           responseBody,
@@ -174,14 +207,17 @@ export async function deliverWebhook(
       }
 
       lastError = `HTTP ${response.status}`;
+      lastFailureReason = `HTTP_${response.status}`;
       logger.warn("Webhook delivery failed", { url, status: response.status, attempt });
     } catch (err) {
-      lastError = isTimeoutError(err)
-        ? `Webhook delivery timed out after ${getWebhookTimeoutMs()}ms`
-        : err instanceof Error
-          ? err.message
-          : String(err);
-      logger.warn("Webhook delivery error", { url, error: lastError, attempt });
+      if (isTimeoutError(err)) {
+        lastFailureReason = "TIMEOUT";
+        lastError = `Webhook delivery timed out after ${timeoutMs}ms`;
+      } else {
+        lastFailureReason = "NETWORK_ERROR";
+        lastError = err instanceof Error ? err.message : String(err);
+      }
+      logger.warn("Webhook delivery error", { url, error: lastError, attempt, failureReason: lastFailureReason });
     }
 
     if (attempt < maxRetries) {
@@ -191,6 +227,8 @@ export async function deliverWebhook(
 
   logger.error("Webhook delivery exhausted retries", { url, event: payload.event });
   incMetric("webhooks_failed_total");
+  incMetric("webhooks_dead_letter_total");
+  incDeliveryFinalOutcome("webhook", maxRetries, "failure");
   const latencyMs = Date.now() - startedAt;
   return {
     success: false,
@@ -198,6 +236,8 @@ export async function deliverWebhook(
     latencyMs,
     attempts: maxRetries,
     errorMessage: lastError ?? "Delivery exhausted retries",
+    failureReason: lastFailureReason ?? "RETRIES_EXHAUSTED",
+    isDeadLettered: true,
     delivered: false,
     status: lastStatusCode ?? null,
     responseBody: lastResponseBody,
@@ -212,7 +252,8 @@ export async function deliverWebhookWithDetails(
   url: string,
   secret: string,
   payload: WebhookPayload,
-  maxRetries = 3
+  maxRetriesOrOptions: number | DeliverWebhookOptions = 3,
+  maybeOptions?: DeliverWebhookOptions
 ): Promise<WebhookDeliveryDetails> {
-  return deliverWebhook(url, secret, payload, maxRetries);
+  return deliverWebhook(url, secret, payload, maxRetriesOrOptions, maybeOptions);
 }

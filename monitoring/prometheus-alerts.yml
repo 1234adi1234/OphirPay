@@ -107,6 +107,33 @@ groups:
             Webhook queue has {{ $value }} pending deliveries. Delivery may be
             backed up. Check webhook worker health.
 
+      - alert: WebhookDeadLetterQueueHigh
+        expr: |
+          rate(ophirpay_webhooks_dead_letter_total[15m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          component: webhooks
+        annotations:
+          summary: "Webhook dead-letter rate elevated"
+          description: |
+            Webhooks are entering the dead-letter queue at {{ $value | humanize }}/s
+            after exhausting all delivery retries. Investigate failing endpoints
+            and subscriber availability.
+
+      - alert: WebhookDeadLetterSpike
+        expr: |
+          increase(ophirpay_webhooks_dead_letter_total[1h]) >= 10
+        for: 5m
+        labels:
+          severity: critical
+          component: webhooks
+        annotations:
+          summary: "Webhook dead-letter deliveries spike detected"
+          description: |
+            More than 10 webhooks have exhausted retries and landed in the dead-letter
+            queue in the last hour. Immediate operator attention required.
+
       # ── API Health Alerts ────────────────────────────────────
 
       - alert: ApiHighErrorRate

@@ -22,6 +22,10 @@ ophirpay_webhooks_delivered_total 0
 # TYPE ophirpay_webhooks_failed_total counter
 ophirpay_webhooks_failed_total 0
 
+# HELP ophirpay_webhooks_dead_letter_total Total webhooks moved to the dead-letter queue after exhausting retries
+# TYPE ophirpay_webhooks_dead_letter_total counter
+ophirpay_webhooks_dead_letter_total 0
+
 # HELP ophirpay_delivery_attempts_total Total delivery attempts by delivery type and attempt number
 # TYPE ophirpay_delivery_attempts_total counter
 
