@@ -13,6 +13,8 @@ interface QrCodeProps {
   className?: string;
   /** Accessible label; also used as the image alt text. */
   title?: string;
+  /** Optional fallback explanation for unsupported browsers or devices. */
+  explanation?: string;
 }
 
 /**
@@ -23,7 +25,13 @@ interface QrCodeProps {
  * changes. Shows a small loading placeholder and a graceful error state
  * instead of breaking the layout.
  */
-export function QrCode({ value, size = 220, className, title = "QR code" }: QrCodeProps) {
+export function QrCode({
+  value,
+  size = 220,
+  className,
+  title = "QR code",
+  explanation,
+}: QrCodeProps) {
   const [dataUrl, setDataUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -89,7 +97,7 @@ export function QrCode({ value, size = 220, className, title = "QR code" }: QrCo
     );
   }
 
-  return (
+  const imgElement = (
     // eslint-disable-next-line @next/next/no-img-element -- QR data URLs are not optimizable via next/image
     <img
       src={dataUrl}
@@ -99,4 +107,17 @@ export function QrCode({ value, size = 220, className, title = "QR code" }: QrCo
       className={cn("rounded-xl", className)}
     />
   );
+
+  if (explanation) {
+    return (
+      <div className="flex flex-col items-center">
+        {imgElement}
+        <p className="mt-2 text-xs text-gray-500 dark:text-gray-400 text-center max-w-xs">
+          {explanation}
+        </p>
+      </div>
+    );
+  }
+
+  return imgElement;
 }
