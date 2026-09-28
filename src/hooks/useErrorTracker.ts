@@ -33,20 +33,34 @@ import { captureError, captureMessage } from "@/lib/sentry";
  * }
  * ```
  */
-export function useErrorTracker(component?: string) {
+export function useErrorTracker(
+  componentOrOptions?: string | { component?: string; segment?: string },
+) {
+  const component =
+    typeof componentOrOptions === "string"
+      ? componentOrOptions
+      : componentOrOptions?.component;
+  const segment =
+    typeof componentOrOptions === "object" ? componentOrOptions?.segment : undefined;
+
   const trackError = useCallback(
     (error: Error, extra?: Record<string, unknown>) => {
-      captureError(error, { component, extra });
+      captureError(error, {
+        component,
+        tags: segment ? { segment } : undefined,
+        extra: { ...(extra || {}), ...(segment ? { segment } : {}) },
+      });
     },
-    [component]
+    [component, segment],
   );
 
   const trackMessage = useCallback(
     (message: string, level: "info" | "warning" | "error" = "error") => {
       captureMessage(message, level);
     },
-    []
+    [],
   );
 
   return { trackError, trackMessage };
 }
+

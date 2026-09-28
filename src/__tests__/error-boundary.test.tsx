@@ -69,4 +69,21 @@ describe('ErrorBoundary', () => {
 
     spy.mockRestore();
   });
+
+  it('passes segment information and triggers error reporting with segment tag', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const onError = vi.fn();
+
+    render(
+      <ErrorBoundary segment="payments" onError={onError}>
+        <BrokenComponent shouldThrow={true} />
+      </ErrorBoundary>
+    );
+
+    expect(screen.getByText('Something went wrong')).toBeDefined();
+    expect(onError).toHaveBeenCalledOnce();
+
+    spy.mockRestore();
+  });
 });
+

@@ -3,10 +3,13 @@
 
 
 import { Component, type ReactNode } from "react";
+import { reportRenderedError } from "@/lib/analytics-events";
 
 interface Props {
   children: ReactNode;
   fallback?: ReactNode;
+  segment?: string;
+  onError?: (error: Error, errorInfo: React.ErrorInfo) => void;
 }
 
 interface State {
@@ -26,6 +29,8 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     console.error("[OphirPay ErrorBoundary]", error.message, errorInfo.componentStack);
+    reportRenderedError(error, undefined, this.props.segment);
+    this.props.onError?.(error, errorInfo);
   }
 
   render() {

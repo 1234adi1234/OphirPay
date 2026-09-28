@@ -204,3 +204,50 @@ describe("global-error.tsx – reports on render", () => {
     expect(screen.getByText("Error ID: digest-42")).toBeDefined();
   });
 });
+
+// ── Component integration: SegmentErrorFallback ──────────────────────────────
+describe("SegmentErrorFallback and per-route error boundaries", () => {
+  it("renders segment fallback UI and calls reportRenderedError with segment attribute", async () => {
+    const { SegmentErrorFallback } = await import("@/components/SegmentErrorFallback");
+    const reset = vi.fn();
+
+    render(
+      <SegmentErrorFallback
+        error={new Error("Failed to load payment history")}
+        reset={reset}
+        segmentName="payments"
+        segmentTitle="Payments"
+      />
+    );
+
+    expect(screen.getByText("Unable to load Payments")).toBeDefined();
+    expect(screen.getByText("Failed to load payment history")).toBeDefined();
+    expect(screen.getByText("Retry Payments")).toBeDefined();
+
+    expect(trackEventSpy).toHaveBeenCalledOnce();
+    expect(trackEventSpy).toHaveBeenCalledWith("error_occurred", {
+      route: "/dashboard",
+      message: "Failed to load payment history",
+      segment: "payments",
+    });
+
+    const retryBtn = screen.getByText("Retry Payments");
+    retryBtn.click();
+    expect(reset).toHaveBeenCalledOnce();
+  });
+
+  it("renders PaymentsError page correctly", async () => {
+    const PaymentsError = (await import("@/app/payments/error")).default;
+    const reset = vi.fn();
+
+    render(<PaymentsError error={new Error("Network timeout")} reset={reset} />);
+
+    expect(screen.getByText("Unable to load Payments")).toBeDefined();
+    expect(trackEventSpy).toHaveBeenCalledWith("error_occurred", {
+      route: "/dashboard",
+      message: "Network timeout",
+      segment: "payments",
+    });
+  });
+});
+
