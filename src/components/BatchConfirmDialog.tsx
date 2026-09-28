@@ -10,11 +10,15 @@ interface BatchRecipient {
   amount: string;
 }
 
-interface BatchConfirmDialogProps {
+export interface BatchConfirmDialogProps {
   open: boolean;
   recipients: BatchRecipient[];
   totalAmount: number;
   estimatedFee: string;
+  feeBasis?: "live" | "cached" | "configured";
+  networkCongestion?: "low" | "medium" | "high";
+  feeExplanation?: string;
+  isFallback?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -26,6 +30,10 @@ export function BatchConfirmDialog({
   recipients,
   totalAmount,
   estimatedFee,
+  feeBasis,
+  networkCongestion,
+  feeExplanation,
+  isFallback,
   onConfirm,
   onCancel,
 }: BatchConfirmDialogProps) {
@@ -48,9 +56,77 @@ export function BatchConfirmDialog({
           </div>
           <div className="flex justify-between text-sm">
             <span className="text-gray-500 dark:text-gray-400">Estimated Fee</span>
-            <span className="font-medium text-gray-900 dark:text-white">{feeXlm}</span>
+            <div className="text-right">
+              <span className="font-medium text-gray-900 dark:text-white">{feeXlm}</span>
+              <span className="text-xs text-gray-500 dark:text-gray-400 block font-mono">
+                (~{estimatedFee} stroops)
+              </span>
+            </div>
           </div>
+
+          {feeBasis && (
+            <div
+              className="flex justify-between items-center text-sm pt-2 border-t border-gray-100 dark:border-gray-800"
+              data-testid="batch-fee-basis-row"
+            >
+              <span className="text-gray-500 dark:text-gray-400">Fee Basis</span>
+              <div className="flex items-center gap-1.5">
+                <span
+                  data-testid="batch-fee-basis-badge"
+                  className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                    feeBasis === "live"
+                      ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                      : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                  }`}
+                >
+                  {feeBasis === "live"
+                    ? "Live stats"
+                    : feeBasis === "cached"
+                      ? "Cached fallback"
+                      : "Configured fallback"}
+                </span>
+                {networkCongestion && (
+                  <span
+                    data-testid="batch-congestion-badge"
+                    className={`px-1.5 py-0.5 rounded-full text-xs font-medium ${
+                      networkCongestion === "low"
+                        ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                        : networkCongestion === "medium"
+                          ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                          : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                    }`}
+                  >
+                    {networkCongestion}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
         </div>
+
+        {/* Fallback Warning */}
+        {isFallback && (
+          <div
+            data-testid="batch-fallback-warning"
+            className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50 text-xs text-amber-800 dark:text-amber-300 flex items-start gap-2"
+          >
+            <span className="text-sm leading-none">⚠️</span>
+            <span>
+              Horizon is unreachable. Fee estimated using {feeBasis === "cached" ? "cached statistics from the last known ledger" : "configured network base fee"}.
+            </span>
+          </div>
+        )}
+
+        {/* Elevated Congestion Explanation */}
+        {feeExplanation && networkCongestion && networkCongestion !== "low" && (
+          <div
+            data-testid="batch-congestion-explanation"
+            className="p-3 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800/50 text-xs text-blue-800 dark:text-blue-300 flex items-start gap-2"
+          >
+            <span className="text-sm leading-none">ℹ️</span>
+            <span>{feeExplanation}</span>
+          </div>
+        )}
 
         {/* Recipient list */}
         <div>

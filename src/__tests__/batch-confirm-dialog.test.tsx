@@ -111,4 +111,50 @@ describe("BatchConfirmDialog", () => {
     expect(screen.getByText("Estimated Fee")).toBeDefined();
     expect(screen.getByText("0.00007 XLM")).toBeDefined();
   });
+
+  it("surfaces live fee basis and network congestion", () => {
+    render(
+      <BatchConfirmDialog
+        {...baseProps}
+        estimatedFee="600"
+        feeBasis="live"
+        networkCongestion="medium"
+        recipients={[{ address: "G" + "A".repeat(55), amount: "10" }]}
+      />
+    );
+    expect(screen.getByTestId("batch-fee-basis-badge")).toBeDefined();
+    expect(screen.getByText("Live stats")).toBeDefined();
+    expect(screen.getByTestId("batch-congestion-badge")).toBeDefined();
+    expect(screen.getByText("medium")).toBeDefined();
+  });
+
+  it("surfaces fallback warning when Horizon is unreachable", () => {
+    render(
+      <BatchConfirmDialog
+        {...baseProps}
+        estimatedFee="400"
+        feeBasis="cached"
+        isFallback={true}
+        recipients={[{ address: "G" + "A".repeat(55), amount: "10" }]}
+      />
+    );
+    expect(screen.getByText("Cached fallback")).toBeDefined();
+    expect(screen.getByTestId("batch-fallback-warning")).toBeDefined();
+    expect(screen.getByText(/Horizon is unreachable/)).toBeDefined();
+  });
+
+  it("surfaces congestion explanation when fee is higher than usual", () => {
+    render(
+      <BatchConfirmDialog
+        {...baseProps}
+        estimatedFee="1200"
+        feeBasis="live"
+        networkCongestion="high"
+        feeExplanation="High network congestion (ledger capacity: 90%, median fee: 300 stroops)."
+        recipients={[{ address: "G" + "A".repeat(55), amount: "10" }]}
+      />
+    );
+    expect(screen.getByTestId("batch-congestion-explanation")).toBeDefined();
+    expect(screen.getByText(/High network congestion/)).toBeDefined();
+  });
 });

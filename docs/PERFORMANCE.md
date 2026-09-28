@@ -238,6 +238,28 @@ aggregate queries for `/api/analytics`. They are now served through
 | `GET /api/audit-log` (+ `/sse`, `/export`) | 1 × `get_audit_log_count` + 1 × `get_audit_entry` per entry | 5 s | `audit-log:count:<contract>`, `audit-log:entry:<contract>:<id>` |
 | `GET /api/fee-config` (+ `/history`, `/collector`) | 1 × simulation each | 30 s | `fee-config:<contract>`, `fee-config:history:<contract>`, `fee-config:collector:<contract>` |
 
+## Horizon fee statistics recommendation & caching (#825)
+
+Transaction fee estimation dynamically tracks live Horizon fee statistics (`/fee_stats`) instead of treating the network base fee as a static constant. This prevents transactions from stalling or failing during periods of network surge or ledger congestion.
+
+### Aggressiveness policies & estimation
+
+The estimator evaluates ledger capacity usage and fee charged percentiles (`p10`, `p50`, `p90`, `p95`):
+
+| Policy | Target Percentile | Typical Use Case |
+|---|---|---|
+| `low` | `p10` / `mode` (floored at base fee) | Non-urgent payments seeking minimal fee spend |
+| `normal` | `p50` (median fee charged) | Standard interactive payments (default) |
+| `high` / `priority` | `p90` / `p95` | Urgent transactions requiring next-ledger inclusion |
+
+### Caching interval & fallback
+
+- **Refresh Interval (TTL)**: In-process caching with a **15-second TTL** (`FEE_STATS_REFRESH_INTERVAL_MS = 15_000`), corresponding to ~3 Stellar ledger closing intervals (~5s per ledger). This guarantees sub-millisecond response times during form rendering and user input without overloading the Horizon instance.
+- **Failover / Fallback**: When Horizon is unreachable (timeout, network outage, or 5xx), the estimator falls back to:
+  1. `basis: "cached"` — the last known good fee statistics if available in process memory.
+  2. `basis: "configured"` — the configured standard network base fee (`100` stroops) if no prior cache exists.
+- **UI Surface & Exact Fee Matching**: Both the Send page and Batch confirmation modal surface the fee recommendation, its basis (`live`, `cached`, or `configured`), network congestion status, and explanatory notes if fees are elevated. The fee displayed to the user prior to signing is directly passed to transaction builders (`buildPaymentTx`, `buildPathPaymentStrictSendTx`, `buildBatchPaymentTx`), ensuring the fee signed in the wallet matches the fee shown.
+
 ### Measured before/after
 
 `src/__tests__/api-cache.benchmark.test.ts` measures the two paths in-process

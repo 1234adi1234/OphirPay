@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePageTitle } from "@/hooks/usePageTitle";
 import { PAGE_TITLES } from "@/lib/page-titles";
 import { useWallet } from "@/hooks/useMultiWallet";
@@ -18,7 +18,13 @@ import {
 } from "@/lib/stellar";
 import { formatAmount, shortenAddress } from "@/lib/utils";
 import { validateMemo } from "@/lib/validation-helpers";
-import { estimateBatchFee } from "@/lib/fee-estimator";
+import {
+  estimateBatchFee,
+  estimateTransactionFee,
+  type FeeEstimate,
+} from "@/lib/fee-estimator";
+
+const BATCH_FEE_REFRESH_INTERVAL_MS = 15_000;
 import { CopyButton } from "@/components/ui/CopyButton";
 import { AddressBookMultiSelect } from "@/components/batches/AddressBookMultiSelect";
 import { mergeAddressBookSelections } from "@/lib/address-book";
@@ -83,7 +89,28 @@ export default function NewBatchPage() {
   const [csvValid, setCsvValid] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [csvError, setCsvError] = useState<string | null>(null);
+  const [batchFeeEstimate, setBatchFeeEstimate] = useState<FeeEstimate | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Fetch fee estimate tracking Horizon statistics
+  useEffect(() => {
+    let isMounted = true;
+    const count = Math.max(1, recipients.length);
+    const fetchFee = () => {
+      estimateTransactionFee(count)
+        .then((fee) => {
+          if (isMounted) setBatchFeeEstimate(fee);
+        })
+        .catch(() => {});
+    };
+
+    fetchFee();
+    const interval = setInterval(fetchFee, BATCH_FEE_REFRESH_INTERVAL_MS);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [recipients.length]);
 
   // ── CSV import wiring ────────────────────────────────────
 
@@ -303,6 +330,7 @@ export default function NewBatchPage() {
       const { xdr } = await buildBatchPaymentTx({
         sourcePublicKey: wallet.publicKey,
         recipients: batchRecipients,
+        baseFee: batchFeeEstimate?.baseFee,
       });
 
       setStep("signing");
@@ -899,7 +927,11 @@ export default function NewBatchPage() {
           amount: r.amount,
         }))}
         totalAmount={totalAmount}
-        estimatedFee={estimateBatchFee(recipients.length)}
+        estimatedFee={batchFeeEstimate?.estimatedFee ?? estimateBatchFee(recipients.length)}
+        feeBasis={batchFeeEstimate?.basis}
+        networkCongestion={batchFeeEstimate?.networkCongestion}
+        isFallback={batchFeeEstimate?.isFallback}
+        feeExplanation={batchFeeEstimate?.explanation}
         onConfirm={handleConfirmSend}
         onCancel={() => setShowConfirm(false)}
       />

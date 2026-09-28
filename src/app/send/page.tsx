@@ -24,7 +24,13 @@ import { formatAmount, formatDate, shortenAddress } from "@/lib/utils";
 import { validateMemo } from "@/lib/validation-helpers";
 import { recordPaymentOnChain } from "@/lib/contracts";
 import { downloadReceiptPdf } from "@/lib/receipt-pdf";
-import { estimateTransactionFee } from "@/lib/fee-estimator";
+import {
+  estimateTransactionFee,
+  type FeeEstimate,
+  type FeePolicy,
+} from "@/lib/fee-estimator";
+
+const SEND_FEE_REFRESH_INTERVAL_MS = 15_000;
 import { useToast } from "@/components/ui/Toast";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { useApiMutation } from "@/hooks/useApiQuery";
@@ -92,7 +98,8 @@ function SendPageClient() {
 
   const [destination, setDestination] = useState("");
   const [amount, setAmount] = useState("");
-  const [feeEstimate, setFeeEstimate] = useState<{ baseFee: string; congestion: string } | null>(null);
+  const [feeEstimate, setFeeEstimate] = useState<FeeEstimate | null>(null);
+  const [feePolicy, setFeePolicy] = useState<FeePolicy>("normal");
   const [memo, setMemo] = useState("");
   const [selectedAsset, setSelectedAsset] = useState<AssetInfo>(XLM_ASSET);
   const [destAsset, setDestAsset] = useState<AssetInfo>(XLM_ASSET);
@@ -172,12 +179,25 @@ function SendPageClient() {
     invalidateKeys: [["recurring"]],
   });
 
-  // Fetch live fee estimate on mount
+  // Fetch live fee estimate on mount and refresh on interval
   useEffect(() => {
-    estimateTransactionFee(1)
-      .then((fee) => setFeeEstimate({ baseFee: fee.baseFee, congestion: fee.networkCongestion }))
-      .catch(() => {});
-  }, []);
+    let isMounted = true;
+    const numOps = sponsorCreate ? 2 : 1;
+    const fetchFee = () => {
+      estimateTransactionFee(numOps, feePolicy)
+        .then((fee) => {
+          if (isMounted) setFeeEstimate(fee);
+        })
+        .catch(() => {});
+    };
+
+    fetchFee();
+    const interval = setInterval(fetchFee, SEND_FEE_REFRESH_INTERVAL_MS);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [sponsorCreate, feePolicy]);
 
   // Pre-fill the form from a shareable payment link (?dest=...&amount=...&memo=...&asset=...)
   useEffect(() => {
@@ -456,6 +476,7 @@ function SendPageClient() {
           destAssetIssuer: destAsset.issuer,
           path: pathEstimate.path,
           memo: memo.trim() || undefined,
+          baseFee: feeEstimate?.baseFee,
         });
         xdr = res.xdr;
       } else {
@@ -468,6 +489,7 @@ function SendPageClient() {
           assetCode: selectedAsset.code,
           assetIssuer: selectedAsset.issuer,
           sponsorCreate,
+          baseFee: feeEstimate?.baseFee,
         });
         xdr = res.xdr;
       }
@@ -1129,17 +1151,80 @@ function SendPageClient() {
           </div>
 
           {feeEstimate && (
-            <div className="mt-2 flex items-center gap-2 text-xs">
-              <span className="text-gray-500 dark:text-gray-400">
-                Network fee: ~{feeEstimate.baseFee} stroops
-              </span>
-              <span className={`px-1.5 py-0.5 rounded-full text-xs font-medium ${
-                feeEstimate.congestion === "low" ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" :
-                feeEstimate.congestion === "medium" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" :
-                "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
-              }`}>
-                {feeEstimate.congestion}
-              </span>
+            <div className="mt-2 space-y-1.5" data-testid="send-fee-section">
+              <div className="flex flex-wrap items-center justify-between gap-1 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="text-gray-500 dark:text-gray-400">
+                    Network fee: ~{feeEstimate.estimatedFee} stroops
+                  </span>
+                  <span
+                    data-testid="fee-congestion-badge"
+                    className={`px-1.5 py-0.5 rounded-full text-xs font-medium ${
+                      feeEstimate.congestion === "low"
+                        ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                        : feeEstimate.congestion === "medium"
+                          ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                          : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                    }`}
+                  >
+                    {feeEstimate.congestion}
+                  </span>
+                  <span
+                    data-testid="fee-basis-badge"
+                    className={`px-1.5 py-0.5 rounded-full text-xs font-medium ${
+                      feeEstimate.basis === "live"
+                        ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                        : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                    }`}
+                  >
+                    {feeEstimate.basis === "live"
+                      ? "live stats"
+                      : `${feeEstimate.basis} fallback`}
+                  </span>
+                </div>
+
+                {/* Aggressiveness Policy Selector */}
+                <div className="flex items-center gap-1" data-testid="fee-policy-selector">
+                  {(["low", "normal", "priority"] as const).map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setFeePolicy(p)}
+                      data-testid={`fee-policy-${p}`}
+                      className={`px-1.5 py-0.5 rounded text-[11px] font-medium transition-colors ${
+                        feePolicy === p
+                          ? "bg-ophir-600 text-white dark:bg-ophir-500"
+                          : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                      }`}
+                    >
+                      {p === "priority" ? "Priority" : p.charAt(0).toUpperCase() + p.slice(1)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Fallback Indication */}
+              {feeEstimate.isFallback && (
+                <div
+                  data-testid="fee-fallback-notice"
+                  className="p-2 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50 text-xs text-amber-800 dark:text-amber-300 flex items-center gap-1.5"
+                >
+                  <span>⚠️</span>
+                  <span>
+                    Horizon unreachable: fee derived from {feeEstimate.basis === "cached" ? "cached statistics" : "configured base fee"}.
+                  </span>
+                </div>
+              )}
+
+              {/* Elevated Congestion Explanation */}
+              {feeEstimate.congestion !== "low" && feeEstimate.explanation && (
+                <div
+                  data-testid="fee-congestion-explanation"
+                  className="p-2 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800/50 text-xs text-blue-800 dark:text-blue-300"
+                >
+                  ℹ️ {feeEstimate.explanation}
+                </div>
+              )}
             </div>
           )}
         </div>
