@@ -138,6 +138,9 @@ export function withCsrf<TContext = undefined>(
   };
 }
 
+export { withMutatingRoute } from "@/lib/api-handler";
+
+
 /**
  * Audit helper: Check if a route handler has CSRF protection.
  * This is a utility for tests and code review, not runtime enforcement.

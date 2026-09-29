@@ -183,6 +183,11 @@ export function badRequestError(message: string) {
   return errorResponse(ERROR_CODES.BAD_REQUEST, message, 400);
 }
 
+export function methodNotAllowedError(message = "Method not allowed") {
+  return errorResponse(ERROR_CODES.METHOD_NOT_ALLOWED, message, 405);
+}
+
+
 // ── Unified Error Handler ──────────────────────────────────────
 
 /**

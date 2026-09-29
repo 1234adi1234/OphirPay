@@ -244,16 +244,49 @@ describe("CSRF coverage + registry drift guard (issues #563, #704)", () => {
     const uniqueFiles = [...new Set(MUTATING_ROUTES.map((r) => r.routeFile))];
 
     for (const routeFile of uniqueFiles) {
-      it(`${routeFile} calls verifyCsrf once per mutating handler`, () => {
+      it(`${routeFile} enforces CSRF once per mutating handler`, () => {
         const full = path.join(API_ROOT, routeFile);
         expect(fs.existsSync(full), `missing route file: ${routeFile}`).toBe(true);
         const source = fs.readFileSync(full, "utf8");
-        expect(source).toContain('from "@/lib/csrf"');
+        const importsProtection =
+          source.includes('from "@/lib/csrf"') ||
+          source.includes('from "@/lib/api-handler"');
+        expect(
+          importsProtection,
+          `${routeFile} must import verifyCsrf, withMutatingRoute, or apiHandler`
+        ).toBe(true);
 
         const handlers = extractMutatingMethods(source).length;
-        const calls = (source.match(/verifyCsrf\s*\(\s*request\s*\)/g) ?? []).length;
+        // Count direct verifyCsrf calls or wrapper usages that enforce CSRF by default
+        const calls = (
+          source.match(
+            /(?:verifyCsrf\s*\(\s*request\s*\)|withMutatingRoute|apiHandler|withApiHandler|withCsrf)/g
+          ) ?? []
+        ).length;
         expect(calls).toBeGreaterThanOrEqual(handlers);
+
+        // A registered mutating route must not silently opt out of CSRF
+        expect(
+          source,
+          `${routeFile} is in MUTATING_ROUTES and cannot opt out of CSRF`
+        ).not.toMatch(/csrf\s*:\s*(?:false|\{\s*exempt\s*:\s*true)/);
       });
     }
+
+    it("requires any route with an explicit CSRF opt-out to be in CSRF_EXEMPT_ROUTES", () => {
+      for (const rel of findRouteFiles(API_ROOT)) {
+        const source = fs.readFileSync(path.join(API_ROOT, rel), "utf8");
+        const hasOptOut = /csrf\s*:\s*(?:false|\{\s*exempt\s*:\s*true)/.test(source);
+        if (hasOptOut) {
+          const apiPath = "/api/" + rel.replace(/\/route\.ts$/, "");
+          const isExempt = CSRF_EXEMPT_ROUTES.some((e) => e.path === apiPath);
+          expect(
+            isExempt,
+            `Route ${apiPath} (${rel}) explicitly opts out of CSRF but is not registered in CSRF_EXEMPT_ROUTES`
+          ).toBe(true);
+        }
+      }
+    });
   });
 });
+
